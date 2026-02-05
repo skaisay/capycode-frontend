@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { getSupabaseClient } from '@/lib/supabase';
 import { api } from '@/lib/api';
+import { reloadUserData, resetUserIdCache, cleanupAnonymousData } from '@/stores/projectStore';
 
 interface UseAuthReturn {
   user: User | null;
@@ -33,6 +34,8 @@ export function useAuth(): UseAuthReturn {
       // Set token for API client
       if (session?.access_token) {
         api.setToken(session.access_token);
+        // Reload user-specific data after auth
+        reloadUserData();
       }
       
       setIsLoading(false);
@@ -47,9 +50,14 @@ export function useAuth(): UseAuthReturn {
         // Update API client token
         api.setToken(session?.access_token ?? null);
         
-        if (event === 'SIGNED_OUT') {
+        if (event === 'SIGNED_IN') {
+          // Clean up any orphaned anonymous data and reload user-specific projects
+          cleanupAnonymousData();
+          reloadUserData();
+        } else if (event === 'SIGNED_OUT') {
           // Clear any cached data
           api.setToken(null);
+          resetUserIdCache();
         }
       }
     );

@@ -312,6 +312,10 @@ interface GenerateResult {
   dependencies: Record<string, string>;
   devDependencies: Record<string, string>;
   expoConfig: Record<string, unknown>;
+  // Chat redirect
+  isChat?: boolean;
+  reason?: string;
+  message?: string;
 }
 
 interface Template {

@@ -361,24 +361,16 @@ export function IDELayout() {
 
               {/* Right controls */}
               <div className="flex items-center gap-2">
-                {/* Home + Dashboard combined */}
+                {/* Dashboard button with home icon */}
                 {user ? (
-                  <div className="flex items-center bg-[#111113]/80 backdrop-blur-xl border border-[#1f1f23]/50 rounded-xl">
-                    <Link
-                      href="/"
-                      className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#6b6b70] hover:text-white transition-all border-r border-[#1f1f23]/50"
-                      title="Home"
-                    >
-                      <Home className="w-3.5 h-3.5" />
-                    </Link>
-                    <Link
-                      href="/dashboard"
-                      className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#6b6b70] hover:text-white transition-all"
-                    >
-                      <LayoutDashboard className="w-3.5 h-3.5" />
-                      Dashboard
-                    </Link>
-                  </div>
+                  <Link
+                    href="/dashboard"
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium bg-[#111113]/80 backdrop-blur-xl border border-[#1f1f23]/50 text-[#6b6b70] hover:text-white hover:border-[#2a2a2e] transition-all"
+                    title="Back to Dashboard"
+                  >
+                    <Home className="w-3.5 h-3.5" />
+                    <LayoutDashboard className="w-3.5 h-3.5" />
+                  </Link>
                 ) : (
                   <Link
                     href="/auth/login"
