@@ -1,0 +1,39 @@
+{
+  "name": "@codevibe/backend",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "CodeVibe Backend API - Hono Server",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.8.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "hono": "^3.12.0",
+    "openai": "^4.24.0",
+    "zod": "^3.22.4",
+    "uuid": "^9.0.1",
+    "archiver": "^6.0.1",
+    "simple-git": "^3.22.0",
+    "node-fetch": "^3.3.2",
+    "ws": "^8.16.0",
+    "dotenv": "^16.3.1",
+    "jsonwebtoken": "^9.0.2",
+    "nanoid": "^5.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/uuid": "^9.0.7",
+    "@types/archiver": "^6.0.2",
+    "@types/ws": "^8.5.10",
+    "@types/jsonwebtoken": "^9.0.5",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0",
+    "eslint": "^8.55.0",
+    "@typescript-eslint/eslint-plugin": "^6.14.0",
+    "@typescript-eslint/parser": "^6.14.0"
+  }
+}

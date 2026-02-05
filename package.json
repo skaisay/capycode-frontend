@@ -1,53 +1,22 @@
 {
-  "name": "@codevibe/frontend",
+  "name": "codevibe-platform",
   "version": "1.0.0",
   "private": true,
+  "description": "AI-powered mobile app generation platform with automatic deployment",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
-  },
-  "dependencies": {
-    "@e2b/code-interpreter": "^2.3.3",
-    "@google/generative-ai": "^0.24.1",
-    "@monaco-editor/react": "^4.6.0",
-    "@radix-ui/react-dialog": "^1.0.5",
-    "@radix-ui/react-dropdown-menu": "^2.0.6",
-    "@radix-ui/react-progress": "^1.0.3",
-    "@radix-ui/react-select": "^2.0.0",
-    "@radix-ui/react-tabs": "^1.0.4",
-    "@radix-ui/react-tooltip": "^1.0.7",
-    "@supabase/auth-helpers-nextjs": "^0.8.7",
-    "@supabase/ssr": "^0.1.0",
-    "@supabase/supabase-js": "^2.39.0",
-    "@tanstack/react-query": "^5.17.0",
-    "class-variance-authority": "^0.7.0",
-    "clsx": "^2.1.0",
-    "e2b": "^2.12.0",
-    "framer-motion": "^10.17.0",
-    "jszip": "^3.10.1",
-    "lucide-react": "^0.303.0",
-    "monaco-editor": "^0.45.0",
-    "next": "14.0.4",
-    "qrcode.react": "^3.1.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-hot-toast": "^2.4.1",
-    "react-resizable-panels": "^1.0.9",
-    "stripe": "^14.11.0",
-    "tailwind-merge": "^2.2.0",
-    "tailwindcss": "^3.4.0",
-    "zustand": "^4.4.7"
+    "dev": "concurrently \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "cd backend && npm run dev",
+    "build": "npm run build:frontend && npm run build:backend",
+    "build:frontend": "cd frontend && npm run build",
+    "build:backend": "cd backend && npm run build",
+    "install:all": "npm install && cd frontend && npm install && cd ../backend && npm install",
+    "lint": "cd frontend && npm run lint && cd ../backend && npm run lint"
   },
   "devDependencies": {
-    "@types/node": "^20.10.0",
-    "@types/react": "^18.2.0",
-    "@types/react-dom": "^18.2.0",
-    "autoprefixer": "^10.4.16",
-    "eslint": "^8.55.0",
-    "eslint-config-next": "14.0.4",
-    "postcss": "^8.4.32",
-    "typescript": "^5.3.0"
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
