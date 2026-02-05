@@ -106,7 +106,7 @@ export function CreateProjectModal({
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 20 }}
           transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-          className="relative w-full max-w-lg bg-[#111113] border border-[#1f1f23] rounded-2xl shadow-2xl overflow-visible"
+          className="relative w-full max-w-lg max-h-[85vh] bg-[#111113] border border-[#1f1f23] rounded-2xl shadow-2xl flex flex-col"
         >
           {/* Header */}
           <div className="flex items-center justify-between p-6 border-b border-[#1f1f23]">
@@ -129,7 +129,7 @@ export function CreateProjectModal({
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="p-6 space-y-5">
+          <form onSubmit={handleSubmit} className="p-6 space-y-5 overflow-y-auto flex-1">
             {/* App Name */}
             <div className="space-y-2">
               <label className="flex items-center gap-2 text-sm font-medium text-[#9a9aa0]">
@@ -226,9 +226,9 @@ export function CreateProjectModal({
 
             {/* Prompt Preview */}
             {initialPrompt && (
-              <div className="p-4 bg-[#0a0a0b] border border-[#1f1f23] rounded-xl">
+              <div className="p-4 bg-[#0a0a0b] border border-[#1f1f23] rounded-xl max-h-32 overflow-y-auto">
                 <div className="text-xs text-[#6b6b70] mb-2 font-medium">Your prompt:</div>
-                <p className="text-sm text-white/80 leading-relaxed">{initialPrompt}</p>
+                <p className="text-sm text-white/80 leading-relaxed break-words">{initialPrompt}</p>
               </div>
             )}
 

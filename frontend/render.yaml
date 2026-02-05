@@ -1,0 +1,22 @@
+# Render.com configuration for frontend
+# Third backup platform (after Vercel and Netlify)
+
+services:
+  - type: web
+    name: capycode-frontend
+    env: node
+    region: frankfurt
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
+    healthCheckPath: /
+    autoDeploy: true

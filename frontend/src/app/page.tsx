@@ -22,7 +22,6 @@ import {
 import { useProjectStore } from '@/stores/projectStore';
 import { getSupabaseClient } from '@/lib/supabase';
 import { CreateProjectModal, ProjectData } from '@/components/CreateProjectModal';
-import { useGenerateProject } from '@/hooks/useGenerateProject';
 
 interface UserData {
   id: string;
@@ -40,12 +39,7 @@ export default function HomePage() {
   const [user, setUser] = useState<UserData | null>(null);
   const [userLoading, setUserLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  
-  const { generateProject, isGenerating } = useGenerateProject({
-    onSuccess: () => {
-      router.push('/editor');
-    },
-  });
+  const [isCreating, setIsCreating] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -88,13 +82,36 @@ export default function HomePage() {
   };
 
   const handleCreateProject = async (data: ProjectData) => {
-    generateProject({
-      prompt: data.prompt,
-      model: data.model,
-      name: data.name,
-      description: data.description,
-    });
+    // Close modal first
     setShowCreateModal(false);
+    
+    // Clear previous chat history and project state to start fresh
+    // Get user ID for data isolation
+    const getUserId = (): string => {
+      try {
+        const supabaseAuth = localStorage.getItem('sb-ollckpiykoiizdwtfnle-auth-token');
+        if (supabaseAuth) {
+          const parsed = JSON.parse(supabaseAuth);
+          if (parsed?.user?.id) return parsed.user.id;
+        }
+      } catch (e) {}
+      return 'anonymous';
+    };
+    
+    const userId = getUserId();
+    const getStorageKey = (key: string): string => `capycode_${userId}_${key}`;
+    
+    localStorage.removeItem(getStorageKey('chat_history'));
+    localStorage.removeItem(getStorageKey('current_project_id'));
+    localStorage.removeItem(getStorageKey('generating'));
+    
+    // Store prompt and settings in localStorage - same as dashboard
+    localStorage.setItem('pending_prompt', data.prompt);
+    localStorage.setItem('pending_model', data.model);
+    localStorage.setItem('pending_autoSelectKey', 'true');
+    localStorage.setItem('pending_userId', userId);
+    
+    // Navigate to editor - AIPromptPanel will read pending_prompt and start generation
     router.push('/editor');
   };
 
@@ -535,7 +552,7 @@ export default function HomePage() {
         onClose={() => setShowCreateModal(false)}
         onConfirm={handleCreateProject}
         initialPrompt={prompt}
-        isCreating={isGenerating}
+        isCreating={isCreating}
       />
     </div>
   );

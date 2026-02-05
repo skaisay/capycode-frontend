@@ -22,12 +22,28 @@ import {
 } from 'lucide-react';
 import { FileTree } from './FileTree';
 import { CodeEditor } from './CodeEditor';
+import { DiffEditor } from './DiffEditor';
 import { Preview } from './Preview';
 import { AIPromptPanel } from './AIPromptPanel';
 import { BuildPanel } from './BuildPanel';
 import { DevToolsPanel } from './DevToolsPanel';
 import { ExpoQRModal } from './ExpoQRModal';
 import { ShareSubmitModal } from './ShareSubmitModal';
+
+// Get current user ID for data isolation
+const getCurrentUserId = (): string => {
+  if (typeof window === 'undefined') return 'anonymous';
+  try {
+    const supabaseAuth = localStorage.getItem('sb-ollckpiykoiizdwtfnle-auth-token');
+    if (supabaseAuth) {
+      const parsed = JSON.parse(supabaseAuth);
+      if (parsed?.user?.id) return parsed.user.id;
+    }
+  } catch (e) {}
+  return 'anonymous';
+};
+
+const getStorageKey = (key: string): string => `capycode_${getCurrentUserId()}_${key}`;
 import { useProjectStore } from '@/stores/projectStore';
 import { useGenerateProject } from '@/hooks/useGenerateProject';
 import { useDevToolsData } from '@/hooks/useDevToolsData';
@@ -81,6 +97,14 @@ export function IDELayout() {
   const [user, setUser] = useState<any>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
   
+  // Diff view state - shows differences between old and new file content
+  const [diffState, setDiffState] = useState<{
+    isOpen: boolean;
+    filePath: string;
+    originalContent: string;
+    modifiedContent: string;
+  } | null>(null);
+  
   const { 
     project, 
     currentFile, 
@@ -114,10 +138,10 @@ export function IDELayout() {
   // 3. Generation hasn't been started in this session
   // 4. No active generation flag in localStorage
   useEffect(() => {
-    const isGeneratingInStorage = typeof window !== 'undefined' && localStorage.getItem('capycode_generating') === 'true';
+    const isGeneratingInStorage = typeof window !== 'undefined' && localStorage.getItem(getStorageKey('generating')) === 'true';
     
     if (shouldRestoreProject && !project && !isGenerating && !generationStarted && !initialPrompt && !isGeneratingInStorage) {
-      const currentProjectId = localStorage.getItem('capycode_current_project_id');
+      const currentProjectId = localStorage.getItem(getStorageKey('current_project_id'));
       if (currentProjectId) {
         console.log('[IDELayout] Restoring project:', currentProjectId);
         loadProject(currentProjectId);
@@ -182,6 +206,50 @@ export function IDELayout() {
     // Don't close file menu - user may want to browse more files
   };
 
+  // Navigate to file by path (from AI chat)
+  const handleFileClick = useCallback((filePath: string) => {
+    if (!project) return;
+    
+    // Find the file in project
+    const file = project.files.find(f => f.path === filePath);
+    if (file) {
+      setCurrentFile(file);
+      setActiveView('code');
+      setShowFiles(true); // Show file tree
+    }
+  }, [project, setCurrentFile]);
+
+  // Open diff view to compare old and new content
+  const openDiffView = useCallback((filePath: string, originalContent: string, modifiedContent: string) => {
+    setDiffState({
+      isOpen: true,
+      filePath,
+      originalContent,
+      modifiedContent
+    });
+    setActiveView('code');
+  }, []);
+
+  // Accept diff changes - update file content
+  const handleDiffAccept = useCallback((content: string) => {
+    if (diffState) {
+      updateFileContent(diffState.filePath, content);
+      setDiffState(null);
+      toast.success('Изменения приняты');
+    }
+  }, [diffState, updateFileContent]);
+
+  // Reject diff changes
+  const handleDiffReject = useCallback(() => {
+    setDiffState(null);
+    toast('Изменения отклонены');
+  }, []);
+
+  // Close diff view
+  const handleDiffClose = useCallback(() => {
+    setDiffState(null);
+  }, []);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -221,6 +289,8 @@ export function IDELayout() {
                   setElementSelectionText('');
                   clearSelectedElements();
                 }}
+                onFileClick={handleFileClick}
+                onOpenDiff={openDiffView}
               />
             </div>
           </div>
@@ -291,24 +361,16 @@ export function IDELayout() {
 
               {/* Right controls */}
               <div className="flex items-center gap-2">
-                {/* Home + Dashboard combined */}
+                {/* Dashboard button with home icon */}
                 {user ? (
-                  <div className="flex items-center bg-[#111113]/80 backdrop-blur-xl border border-[#1f1f23]/50 rounded-xl">
-                    <Link
-                      href="/"
-                      className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#6b6b70] hover:text-white transition-all border-r border-[#1f1f23]/50"
-                      title="Home"
-                    >
-                      <Home className="w-3.5 h-3.5" />
-                    </Link>
-                    <Link
-                      href="/dashboard"
-                      className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#6b6b70] hover:text-white transition-all"
-                    >
-                      <LayoutDashboard className="w-3.5 h-3.5" />
-                      Dashboard
-                    </Link>
-                  </div>
+                  <Link
+                    href="/dashboard"
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium bg-[#111113]/80 backdrop-blur-xl border border-[#1f1f23]/50 text-[#6b6b70] hover:text-white hover:border-[#2a2a2e] transition-all"
+                    title="Back to Dashboard"
+                  >
+                    <Home className="w-3.5 h-3.5" />
+                    <LayoutDashboard className="w-3.5 h-3.5" />
+                  </Link>
                 ) : (
                   <Link
                     href="/auth/login"
@@ -423,10 +485,22 @@ export function IDELayout() {
                     />
                   )}
                   {activeView === 'code' && (
-                    <CodeEditor 
-                      file={currentFile}
-                      onChange={updateFileContent}
-                    />
+                    diffState?.isOpen ? (
+                      <DiffEditor
+                        originalContent={diffState.originalContent}
+                        modifiedContent={diffState.modifiedContent}
+                        fileName={diffState.filePath}
+                        language={diffState.filePath.endsWith('.tsx') || diffState.filePath.endsWith('.ts') ? 'typescript' : 'javascript'}
+                        onAccept={handleDiffAccept}
+                        onReject={handleDiffReject}
+                        onClose={handleDiffClose}
+                      />
+                    ) : (
+                      <CodeEditor 
+                        file={currentFile}
+                        onChange={updateFileContent}
+                      />
+                    )
                   )}
                   {activeView === 'build' && (
                     <BuildPanel project={project} />

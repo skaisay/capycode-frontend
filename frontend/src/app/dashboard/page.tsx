@@ -50,6 +50,21 @@ import {
 } from '@/lib/stripe';
 import toast from 'react-hot-toast';
 
+// Get current user ID for data isolation
+const getCurrentUserId = (): string => {
+  if (typeof window === 'undefined') return 'anonymous';
+  try {
+    const supabaseAuth = localStorage.getItem('sb-ollckpiykoiizdwtfnle-auth-token');
+    if (supabaseAuth) {
+      const parsed = JSON.parse(supabaseAuth);
+      if (parsed?.user?.id) return parsed.user.id;
+    }
+  } catch (e) {}
+  return 'anonymous';
+};
+
+const getStorageKey = (key: string): string => `capycode_${getCurrentUserId()}_${key}`;
+
 interface UserData {
   id: string;
   email: string;
@@ -238,8 +253,10 @@ export default function DashboardPage() {
       
       toast.success('Project created!');
       
-      // Clear previous chat history to start fresh for new project
-      localStorage.removeItem('capycode_chat_history');
+      // Clear previous chat history and project state to start fresh (user-isolated)
+      localStorage.removeItem(getStorageKey('chat_history'));
+      localStorage.removeItem(getStorageKey('current_project_id'));
+      localStorage.removeItem(getStorageKey('generating'));
       
       // Store prompt in localStorage to avoid URL length limits
       localStorage.setItem('pending_prompt', newPrompt);
@@ -357,14 +374,6 @@ export default function DashboardPage() {
           </nav>
 
           <div className="flex items-center gap-4">
-            <Link
-              href="/editor"
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              New Project
-            </Link>
-            
             <div className="relative group">
               <button className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-[#1f1f23] transition-colors">
                 {user?.avatar_url ? (
@@ -737,13 +746,20 @@ export default function DashboardPage() {
           >
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-semibold text-white">All Projects</h2>
-              <Link
-                href="/editor"
+              <button
+                onClick={() => {
+                  setActiveTab('overview');
+                  // Focus on prompt input after tab change
+                  setTimeout(() => {
+                    const promptInput = document.querySelector('textarea[placeholder*="Опишите"], textarea[placeholder*="Describe"]') as HTMLTextAreaElement;
+                    if (promptInput) promptInput.focus();
+                  }, 100);
+                }}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
               >
                 <Plus className="w-4 h-4" />
                 New Project
-              </Link>
+              </button>
             </div>
 
             {loadingData ? (

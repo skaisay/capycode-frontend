@@ -1,6 +1,80 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+// Cache user ID to avoid repeated localStorage reads
+let cachedUserId: string | null = null;
+let userIdValidated = false;
+
+// Get current user ID for data isolation
+// CRITICAL: Returns null if user is not authenticated - prevents data leakage between users
+const getCurrentUserId = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  
+  // Return cached value if we've already validated the user
+  if (userIdValidated && cachedUserId) {
+    return cachedUserId;
+  }
+  
+  try {
+    // Try to get user ID from Supabase session in localStorage
+    const supabaseAuth = localStorage.getItem('sb-ollckpiykoiizdwtfnle-auth-token');
+    if (supabaseAuth) {
+      const parsed = JSON.parse(supabaseAuth);
+      if (parsed?.user?.id) {
+        cachedUserId = parsed.user.id;
+        userIdValidated = true;
+        return cachedUserId;
+      }
+    }
+  } catch (e) {
+    console.error('[ProjectStore] Error getting user ID:', e);
+  }
+  
+  // IMPORTANT: Return null instead of 'anonymous' to prevent data leakage
+  // This means unauthenticated users won't see any projects
+  return null;
+};
+
+// Reset cached user ID (call on logout or user change)
+export const resetUserIdCache = () => {
+  cachedUserId = null;
+  userIdValidated = false;
+};
+
+// Get storage key with user isolation
+// Returns null if no authenticated user - prevents cross-user data access
+const getStorageKey = (key: string): string | null => {
+  const userId = getCurrentUserId();
+  if (!userId) return null;
+  return `capycode_${userId}_${key}`;
+};
+
+// Clean up old anonymous data to prevent data leakage
+// This should be called once on app initialization
+export const cleanupAnonymousData = () => {
+  if (typeof window === 'undefined') return;
+  
+  const keysToRemove: string[] = [];
+  
+  // Find all keys with anonymous prefix
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('capycode_anonymous_')) {
+      keysToRemove.push(key);
+    }
+  }
+  
+  // Remove them
+  keysToRemove.forEach(key => {
+    localStorage.removeItem(key);
+    console.log('[ProjectStore] Removed anonymous data:', key);
+  });
+  
+  if (keysToRemove.length > 0) {
+    console.log(`[ProjectStore] Cleaned up ${keysToRemove.length} anonymous data entries`);
+  }
+};
+
 export interface ProjectFile {
   path: string;
   content: string;
@@ -75,18 +149,22 @@ interface ProjectState {
   undoLastChange: () => void;
 }
 
-// Helper to save backups to localStorage
+// Helper to save backups to localStorage (user-isolated)
 const saveBackupsToStorage = (backups: ProjectBackup[]) => {
   if (typeof window !== 'undefined') {
-    localStorage.setItem('capycode_backups', JSON.stringify(backups));
+    const storageKey = getStorageKey('backups');
+    if (!storageKey) return; // Not authenticated - don't save
+    localStorage.setItem(storageKey, JSON.stringify(backups));
   }
 };
 
-// Helper to load backups from localStorage
+// Helper to load backups from localStorage (user-isolated)
 const loadBackupsFromStorage = (): ProjectBackup[] => {
   if (typeof window !== 'undefined') {
     try {
-      return JSON.parse(localStorage.getItem('capycode_backups') || '[]');
+      const storageKey = getStorageKey('backups');
+      if (!storageKey) return []; // Not authenticated - return empty
+      return JSON.parse(localStorage.getItem(storageKey) || '[]');
     } catch {
       return [];
     }
@@ -94,22 +172,49 @@ const loadBackupsFromStorage = (): ProjectBackup[] => {
   return [];
 };
 
-// Helper to save full project to localStorage
+// Helper to save full project to localStorage (user-isolated)
 const saveFullProject = (project: Project) => {
   if (typeof window !== 'undefined') {
-    const projects = JSON.parse(localStorage.getItem('capycode_projects') || '{}');
+    const storageKey = getStorageKey('projects');
+    if (!storageKey) return; // Not authenticated - don't save
+    const projects = JSON.parse(localStorage.getItem(storageKey) || '{}');
     projects[project.id] = project;
-    localStorage.setItem('capycode_projects', JSON.stringify(projects));
+    localStorage.setItem(storageKey, JSON.stringify(projects));
   }
 };
 
-// Helper to load full project from localStorage
+// Helper to load full project from localStorage (user-isolated)
 const loadFullProject = (id: string): Project | null => {
   if (typeof window !== 'undefined') {
-    const projects = JSON.parse(localStorage.getItem('capycode_projects') || '{}');
+    const storageKey = getStorageKey('projects');
+    if (!storageKey) return null; // Not authenticated - return null
+    const projects = JSON.parse(localStorage.getItem(storageKey) || '{}');
     return projects[id] || null;
   }
   return null;
+};
+
+// Helper to save recent projects to localStorage (user-isolated)
+const saveRecentProjectsToStorage = (recentProjects: RecentProject[]) => {
+  if (typeof window !== 'undefined') {
+    const storageKey = getStorageKey('recent_projects');
+    if (!storageKey) return; // Not authenticated - don't save
+    localStorage.setItem(storageKey, JSON.stringify(recentProjects));
+  }
+};
+
+// Helper to load recent projects from localStorage (user-isolated)
+const loadRecentProjectsFromStorage = (): RecentProject[] => {
+  if (typeof window !== 'undefined') {
+    try {
+      const storageKey = getStorageKey('recent_projects');
+      if (!storageKey) return []; // Not authenticated - return empty
+      return JSON.parse(localStorage.getItem(storageKey) || '[]');
+    } catch {
+      return [];
+    }
+  }
+  return [];
 };
 
 export const useProjectStore = create<ProjectState>()(
@@ -121,7 +226,7 @@ export const useProjectStore = create<ProjectState>()(
       isLoading: false,
       error: null,
       unsavedChanges: new Set(),
-      recentProjects: [],
+      recentProjects: loadRecentProjectsFromStorage(), // Load user-isolated recent projects
       backups: loadBackupsFromStorage(),
       maxBackups: 10,
       lastUserPrompt: null,
@@ -138,9 +243,12 @@ export const useProjectStore = create<ProjectState>()(
         // Auto-save to recent and localStorage
         if (project) {
           saveFullProject(project);
-          // Save current project ID for restoration on page reload
+          // Save current project ID for restoration on page reload (user-isolated)
           if (typeof window !== 'undefined') {
-            localStorage.setItem('capycode_current_project_id', project.id);
+            const storageKey = getStorageKey('current_project_id');
+            if (storageKey) {
+              localStorage.setItem(storageKey, project.id);
+            }
           }
           get().saveToRecent();
         }
@@ -167,7 +275,10 @@ export const useProjectStore = create<ProjectState>()(
         // Auto-save
         saveFullProject(project);
         if (typeof window !== 'undefined') {
-          localStorage.setItem('capycode_current_project_id', project.id);
+          const storageKey = getStorageKey('current_project_id');
+          if (storageKey) {
+            localStorage.setItem(storageKey, project.id);
+          }
         }
         get().saveToRecent();
       },
@@ -298,6 +409,8 @@ export const useProjectStore = create<ProjectState>()(
     const updated = [recentEntry, ...filtered].slice(0, 10); // Keep last 10
 
     set({ recentProjects: updated });
+    // Save to user-isolated storage
+    saveRecentProjectsToStorage(updated);
   },
 
   loadProject: (id: string) => {
@@ -315,12 +428,17 @@ export const useProjectStore = create<ProjectState>()(
     const { recentProjects } = get();
     const updated = recentProjects.filter(p => p.id !== id);
     set({ recentProjects: updated });
+    // Save to user-isolated storage
+    saveRecentProjectsToStorage(updated);
     
-    // Also delete from full storage
+    // Also delete from full storage (user-isolated)
     if (typeof window !== 'undefined') {
-      const projects = JSON.parse(localStorage.getItem('capycode_projects') || '{}');
-      delete projects[id];
-      localStorage.setItem('capycode_projects', JSON.stringify(projects));
+      const storageKey = getStorageKey('projects');
+      if (storageKey) {
+        const projects = JSON.parse(localStorage.getItem(storageKey) || '{}');
+        delete projects[id];
+        localStorage.setItem(storageKey, JSON.stringify(projects));
+      }
     }
   },
 
@@ -332,9 +450,12 @@ export const useProjectStore = create<ProjectState>()(
       error: null,
       unsavedChanges: new Set(),
     });
-    // Clear current project ID
+    // Clear current project ID (user-isolated)
     if (typeof window !== 'undefined') {
-      localStorage.removeItem('capycode_current_project_id');
+      const storageKey = getStorageKey('current_project_id');
+      if (storageKey) {
+        localStorage.removeItem(storageKey);
+      }
     }
   },
 
@@ -447,12 +568,32 @@ export const useProjectStore = create<ProjectState>()(
     }),
     {
       name: 'capycode-project-store',
-      partialize: (state) => ({ 
-        recentProjects: state.recentProjects,
-      }),
+      // Don't persist recentProjects via middleware - we handle it manually with user isolation
+      partialize: () => ({}),
     }
   )
 );
+
+// Function to reload user data after authentication
+// Call this when user logs in to load their projects
+export const reloadUserData = () => {
+  // Reset cache so we pick up the new user ID
+  resetUserIdCache();
+  
+  // Reload user-specific data
+  const recentProjects = loadRecentProjectsFromStorage();
+  const backups = loadBackupsFromStorage();
+  
+  useProjectStore.setState({
+    recentProjects,
+    backups,
+  });
+  
+  console.log('[ProjectStore] Reloaded user data:', { 
+    recentProjects: recentProjects.length,
+    backups: backups.length 
+  });
+};
 
 // DISABLED: Auto-restore was causing bugs - new projects were being overwritten
 // Restoration now happens explicitly in components that need it

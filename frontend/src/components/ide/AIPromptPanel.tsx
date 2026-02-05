@@ -51,6 +51,8 @@ interface AIPromptPanelProps {
   onStopGeneration?: () => void; // Stop generation callback
   elementSelectionText?: string; // Text describing selected elements from Preview
   onClearElementSelection?: () => void; // Clear selected elements
+  onFileClick?: (filePath: string) => void; // Navigate to file in editor
+  onOpenDiff?: (filePath: string, original: string, modified: string) => void; // Open diff view
 }
 
 interface AIStatus {
@@ -97,27 +99,42 @@ const SUGGESTIONS = [
   },
 ];
 
-// Local storage key
-const CHAT_STORAGE_KEY = 'capycode_chat_history';
-const SELECTED_KEY_STORAGE = 'capycode_selected_api_key';
+// Get current user ID for data isolation
+const getCurrentUserId = (): string => {
+  if (typeof window === 'undefined') return 'anonymous';
+  try {
+    const supabaseAuth = localStorage.getItem('sb-ollckpiykoiizdwtfnle-auth-token');
+    if (supabaseAuth) {
+      const parsed = JSON.parse(supabaseAuth);
+      if (parsed?.user?.id) return parsed.user.id;
+    }
+  } catch (e) {}
+  return 'anonymous';
+};
 
-// Get saved selected key from localStorage
+const getStorageKey = (key: string): string => `capycode_${getCurrentUserId()}_${key}`;
+
+// Local storage keys (user-isolated)
+const getChatStorageKey = () => getStorageKey('chat_history');
+const getSelectedKeyStorage = () => getStorageKey('selected_api_key');
+
+// Get saved selected key from localStorage (user-isolated)
 function getSavedSelectedKey(): string | null {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem(SELECTED_KEY_STORAGE);
+  return localStorage.getItem(getSelectedKeyStorage());
 }
 
-// Save selected key to localStorage
+// Save selected key to localStorage (user-isolated)
 function saveSelectedKey(keyId: string | null) {
   if (typeof window === 'undefined') return;
   if (keyId) {
-    localStorage.setItem(SELECTED_KEY_STORAGE, keyId);
+    localStorage.setItem(getSelectedKeyStorage(), keyId);
   } else {
-    localStorage.removeItem(SELECTED_KEY_STORAGE);
+    localStorage.removeItem(getSelectedKeyStorage());
   }
 }
 
-export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGeneration, elementSelectionText, onClearElementSelection }: AIPromptPanelProps) {
+export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGeneration, elementSelectionText, onClearElementSelection, onFileClick, onOpenDiff }: AIPromptPanelProps) {
   // Model and API key are now stored in localStorage (set by dashboard/IDELayout)
   const [prompt, setPrompt] = useState('');
   const [selectedModel, setSelectedModel] = useState<AIModel>(getDefaultModel());
@@ -246,9 +263,9 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
     }
   }, [showBackupsDropdown]);
 
-  // Load chat history from localStorage
+  // Load chat history from localStorage (user-isolated)
   useEffect(() => {
-    const saved = localStorage.getItem(CHAT_STORAGE_KEY);
+    const saved = localStorage.getItem(getChatStorageKey());
     if (saved) {
       try {
         setChatHistory(JSON.parse(saved));
@@ -345,10 +362,10 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
     }
   }, [initialPrompt, hasProcessedInitialPrompt, isGenerating, user, selectedModel]);
 
-  // Save chat history to localStorage
+  // Save chat history to localStorage (user-isolated)
   useEffect(() => {
     if (chatHistory.length > 0) {
-      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatHistory));
+      localStorage.setItem(getChatStorageKey(), JSON.stringify(chatHistory));
     }
   }, [chatHistory]);
 
@@ -455,7 +472,7 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
 
   const handleNewChat = () => {
     setChatHistory([]);
-    localStorage.removeItem(CHAT_STORAGE_KEY);
+    localStorage.removeItem(getChatStorageKey());
   };
 
   const handleClearChat = () => {
@@ -1378,11 +1395,15 @@ ${err.message || 'An unexpected error occurred.'}
                           {renderMessageContent(message.content)}
                         </div>
                         
-                        {/* Files Modified - with staggered animation */}
+                        {/* Files Modified - with staggered animation - CLICKABLE */}
                         {message.files && message.files.length > 0 && (
                           <div className="mt-3 space-y-1">
+                            <div className="text-xs text-[#6b6b70] mb-2 flex items-center gap-1">
+                              <FileEdit className="w-3.5 h-3.5" />
+                              <span>Изменённые файлы ({message.files.length}):</span>
+                            </div>
                             {message.files.map((file, idx) => (
-                              <motion.div 
+                              <motion.button 
                                 key={idx}
                                 initial={{ opacity: 0, x: -10 }}
                                 animate={{ opacity: 1, x: 0 }}
@@ -1391,7 +1412,8 @@ ${err.message || 'An unexpected error occurred.'}
                                   duration: 0.3,
                                   ease: "easeOut" 
                                 }}
-                                className="flex items-center gap-2 text-xs text-[#6b6b70] py-1"
+                                onClick={() => onFileClick?.(file)}
+                                className="flex items-center gap-2 text-xs py-1.5 px-2 w-full rounded-lg hover:bg-[#1f1f23] transition-colors group cursor-pointer text-left"
                               >
                                 <motion.div
                                   initial={{ scale: 0 }}
@@ -1400,9 +1422,10 @@ ${err.message || 'An unexpected error occurred.'}
                                 >
                                   <Check className="w-3.5 h-3.5 text-emerald-500" />
                                 </motion.div>
-                                <FileCode className="w-3.5 h-3.5" />
-                                <span className="font-mono">{file}</span>
-                              </motion.div>
+                                <FileCode className="w-3.5 h-3.5 text-[#6b6b70] group-hover:text-emerald-400 transition-colors" />
+                                <span className="font-mono text-[#6b6b70] group-hover:text-[#e5e5e5] transition-colors">{file}</span>
+                                <ExternalLink className="w-3 h-3 text-[#4b4b50] group-hover:text-emerald-400 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />
+                              </motion.button>
                             ))}
                           </div>
                         )}
