@@ -31,6 +31,7 @@ import { ShareSubmitModal } from './ShareSubmitModal';
 import { useProjectStore } from '@/stores/projectStore';
 import { useGenerateProject } from '@/hooks/useGenerateProject';
 import { useDevToolsData } from '@/hooks/useDevToolsData';
+import { useElementSelectorStore } from '@/stores/elementSelectorStore';
 import { getSupabaseClient } from '@/lib/supabase';
 import toast from 'react-hot-toast';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -83,7 +84,18 @@ export function IDELayout() {
     isLoading 
   } = useProjectStore();
 
-  const { generateProject, isGenerating, progress } = useGenerateProject();
+  const { generateProject, isGenerating, progress, cancelGeneration } = useGenerateProject();
+  
+  // Element selector store for AI chat integration
+  const { selectedElements, getSelectionDescription, clearSelectedElements } = useElementSelectorStore();
+  
+  // State for element selection text to inject into AI prompt
+  const [elementSelectionText, setElementSelectionText] = useState('');
+  
+  // Handle element selection from Preview
+  const handleElementSelected = useCallback((description: string) => {
+    setElementSelectionText(description);
+  }, []);
   
   // DevTools data - real subscription and usage from Supabase
   const { logs, history, credits, addLog, clearLogs, refreshData } = useDevToolsData();
@@ -164,6 +176,12 @@ export function IDELayout() {
                 isGenerating={isGenerating}
                 progress={progress}
                 initialPrompt={initialPrompt}
+                onStopGeneration={cancelGeneration}
+                elementSelectionText={elementSelectionText}
+                onClearElementSelection={() => {
+                  setElementSelectionText('');
+                  clearSelectedElements();
+                }}
               />
             </div>
           </div>
@@ -359,7 +377,11 @@ export function IDELayout() {
                   showDevTools ? 'pb-[288px]' : 'pb-8'
                 }`}>
                   {activeView === 'preview' && (
-                    <Preview project={project} isGenerating={isGenerating} />
+                    <Preview 
+                      project={project} 
+                      isGenerating={isGenerating} 
+                      onElementSelected={handleElementSelected}
+                    />
                   )}
                   {activeView === 'code' && (
                     <CodeEditor 

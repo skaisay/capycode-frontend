@@ -22,15 +22,17 @@ const { Sandbox } = require('e2b');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
+// Middleware - Allow all origins for CORS
 app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'https://frontend-lyart-nine-90lbels2xz.vercel.app',
-    /\.vercel\.app$/,
-  ],
-  credentials: true,
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: false,
 }));
+
+// Handle preflight requests explicitly
+app.options('*', cors());
+
 app.use(express.json({ limit: '50mb' }));
 
 const E2B_API_KEY = process.env.E2B_API_KEY;
@@ -208,31 +210,49 @@ app.post('/sandbox/expo-start', async (req, res) => {
       });
     }
 
-    // Create startup script
+    // Create startup script - use /home/user for write permissions
     const startupScript = `#!/bin/bash
-set -e
+# Don't use set -e to continue on errors
 cd ${projectDir}
 source $HOME/.nvm/nvm.sh 2>/dev/null || true
 
-echo "Starting npm install..." > /tmp/expo-status.log
-npm install >> /tmp/expo-install.log 2>&1
-echo "npm install complete" >> /tmp/expo-status.log
+echo "=== Starting at $(date) ===" > /home/user/expo-status.log
+echo "Working directory: $(pwd)" >> /home/user/expo-status.log
+echo "Node version: $(node -v)" >> /home/user/expo-status.log
+echo "NPM version: $(npm -v)" >> /home/user/expo-status.log
 
-echo "Installing expo-cli..." >> /tmp/expo-status.log
-npm install -g expo-cli @expo/ngrok >> /tmp/expo-install.log 2>&1
-echo "expo-cli installed" >> /tmp/expo-status.log
+echo "Starting npm install..." >> /home/user/expo-status.log
+npm install >> /home/user/expo-install.log 2>&1 || echo "npm install had errors" >> /home/user/expo-status.log
+echo "npm install complete" >> /home/user/expo-status.log
 
-echo "Starting Expo..." >> /tmp/expo-status.log
-npx expo start --tunnel --non-interactive > /tmp/expo.log 2>&1 &
-echo "Expo started" >> /tmp/expo-status.log
+echo "Installing expo-cli..." >> /home/user/expo-status.log
+npm install -g expo-cli @expo/ngrok >> /home/user/expo-install.log 2>&1 || true
+echo "expo-cli installed" >> /home/user/expo-status.log
+
+echo "Starting Expo..." >> /home/user/expo-status.log
+# Run expo with tunnel mode
+npx expo start --tunnel --non-interactive >> /home/user/expo.log 2>&1 &
+EXPO_PID=$!
+echo "Expo started with PID: $EXPO_PID" >> /home/user/expo-status.log
+echo "Expo started" >> /home/user/expo-status.log
+
+# Keep script alive to monitor
+sleep 300
 `;
 
-    await sandbox.files.write('/tmp/start-expo.sh', startupScript);
+    await sandbox.files.write('/home/user/start-expo.sh', startupScript);
     
-    await sandbox.commands.run(
-      'chmod +x /tmp/start-expo.sh && nohup /tmp/start-expo.sh > /tmp/startup.log 2>&1 &',
-      { timeoutMs: 5000 }
-    );
+    // Use chmod separately, then start script in background without waiting
+    await sandbox.commands.run('chmod +x /home/user/start-expo.sh', { timeoutMs: 5000 });
+    
+    // Start the script in background - don't await, just fire and forget
+    sandbox.commands.run(
+      'bash /home/user/start-expo.sh',
+      { timeoutMs: 0, background: true }
+    ).catch(err => {
+      // Ignore - this runs in background
+      console.log('[E2B] Background script started (or timeout ignored)');
+    });
 
     console.log('[E2B] Expo starting in background');
 
@@ -259,17 +279,21 @@ app.post('/sandbox/expo-status', async (req, res) => {
     const sandbox = await reconnectSandbox(sandboxId);
 
     const statusResult = await sandbox.commands.run(
-      'cat /tmp/expo-status.log 2>/dev/null || echo "not started"',
+      'cat /home/user/expo-status.log 2>/dev/null || echo "not started"',
       { timeoutMs: 5000 }
     );
 
     const expoLogResult = await sandbox.commands.run(
-      'cat /tmp/expo.log 2>/dev/null | tail -100',
+      'cat /home/user/expo.log 2>/dev/null | tail -100',
       { timeoutMs: 5000 }
     );
 
     const statusLog = statusResult.stdout || '';
     const expoLog = expoLogResult.stdout || '';
+    
+    // Log status for debugging
+    console.log('[E2B] Status log:', statusLog.slice(0, 200));
+    if (expoLog) console.log('[E2B] Expo log:', expoLog.slice(0, 200));
 
     let status = 'starting';
     let message = 'Запуск...';
@@ -291,13 +315,22 @@ app.post('/sandbox/expo-status', async (req, res) => {
       message = 'Expo работает';
     }
 
-    // Find Expo URL
+    // Find Expo URL - look for tunnel URL
     let expoUrl = '';
-    const urlMatch = expoLog.match(/exp:\/\/[^\s\]"]+/) || 
-                     expoLog.match(/https:\/\/exp\.host\/[^\s"]+/);
-
-    if (urlMatch) {
-      expoUrl = urlMatch[0].replace(/[\]\)"]+$/, '');
+    const tunnelMatch = expoLog.match(/Tunnel ready at (exp:\/\/[^\s]+)/);
+    const expMatch = expoLog.match(/exp:\/\/[^\s\]"]+/);
+    const expHostMatch = expoLog.match(/https:\/\/exp\.host\/[^\s"]+/);
+    
+    if (tunnelMatch) {
+      expoUrl = tunnelMatch[1];
+    } else if (expMatch) {
+      expoUrl = expMatch[0].replace(/[\]\)"]+$/, '');
+    } else if (expHostMatch) {
+      expoUrl = expHostMatch[0];
+    }
+    
+    if (expoUrl) {
+      console.log('[E2B] Found Expo URL:', expoUrl);
       status = 'ready';
       message = 'Expo готов!';
     }

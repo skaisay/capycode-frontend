@@ -19,18 +19,32 @@ async function chatWithGemini(
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
   
-  const systemPrompt = `You are a helpful AI assistant for a mobile app development platform called CapyCode.
-You help users with their React Native / Expo projects.
+  const hasProject = context && context.includes('Current project:');
+  
+  const systemPrompt = `You are CapyCode AI - an intelligent assistant that helps build React Native / Expo mobile apps.
 
-${context ? `CURRENT PROJECT CONTEXT:\n${context}\n\n` : ''}
+${hasProject ? `ACTIVE PROJECT:\n${context}\n\nYou are currently working on this project. The user can ask you to modify, edit, or add features to it.` : 'No project is currently open.'}
 
-IMPORTANT RULES:
-- Be concise and helpful
-- If the user asks a question, answer it directly
-- If the user wants to modify the app, explain what needs to be changed
-- Don't generate full code unless explicitly asked
-- Use markdown for formatting
-- Keep responses under 500 words unless necessary`;
+YOUR CAPABILITIES:
+- Create complete React Native mobile apps from scratch
+- Edit existing files and add new features
+- Understand project context and continue where you left off
+- Run terminal commands (npm install, expo start, etc.)
+- Check console for errors and auto-fix them
+
+RESPONSE RULES:
+${hasProject ? `
+- You KNOW this project. Greet the user and offer to help with the current app.
+- If user says "hi/привет", briefly describe what the project does and ask how to help.
+- When user asks to modify something, DO IT - don't just explain how.
+- Be proactive - suggest improvements based on the current code.
+` : `
+- No project is open. Ask user what app they want to create.
+- Be ready to generate a complete app structure.
+`}
+- Use markdown for code snippets
+- Be concise but helpful
+- NEVER just explain how to do something - ACTUALLY DO IT by generating code`;
 
   const result = await model.generateContent(`${systemPrompt}\n\nUser: ${message}`);
   return result.response.text();
@@ -42,6 +56,21 @@ async function chatWithOpenAI(
   context: string, 
   apiKey: string
 ): Promise<string> {
+  const hasProject = context && context.includes('Current project:');
+  
+  const systemPrompt = `You are CapyCode AI - an intelligent assistant that builds React Native / Expo mobile apps.
+
+${hasProject ? `ACTIVE PROJECT:\n${context}\n\nYou are working on this project. Help the user modify, edit, or add features.` : 'No project is currently open.'}
+
+RULES:
+${hasProject ? `
+- You KNOW this project. Greet and offer to help with the current app.
+- When user says "hi", briefly describe what the project does.
+- When asked to modify something, DO IT - generate the code.
+` : `- No project open. Ask what app to create.`}
+- Use markdown for code
+- NEVER just explain - ACTUALLY generate code when asked`;
+
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -51,15 +80,10 @@ async function chatWithOpenAI(
     body: JSON.stringify({
       model: 'gpt-4o-mini',
       messages: [
-        {
-          role: 'system',
-          content: `You are a helpful AI assistant for CapyCode, a mobile app development platform.
-Help users with their React Native / Expo projects. Be concise and helpful.
-${context ? `\nCurrent project context:\n${context}` : ''}`
-        },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: message }
       ],
-      max_tokens: 1000,
+      max_tokens: 1500,
       temperature: 0.7,
     }),
   });
@@ -79,6 +103,16 @@ async function chatWithAnthropic(
   context: string, 
   apiKey: string
 ): Promise<string> {
+  const hasProject = context && context.includes('Current project:');
+  
+  const systemPrompt = `You are CapyCode AI - an intelligent assistant that builds React Native / Expo mobile apps.
+
+${hasProject ? `ACTIVE PROJECT:\n${context}\n\nYou are working on this project.` : 'No project is currently open.'}
+
+RULES:
+${hasProject ? `- You KNOW this project. When user says hi, describe the app and offer to help.` : `- Ask what app to create.`}
+- Use markdown for code. NEVER just explain - generate code when asked.`;
+
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -88,10 +122,8 @@ async function chatWithAnthropic(
     },
     body: JSON.stringify({
       model: 'claude-3-haiku-20240307',
-      max_tokens: 1000,
-      system: `You are a helpful AI assistant for CapyCode, a mobile app development platform.
-Help users with their React Native / Expo projects. Be concise.
-${context ? `\nCurrent project context:\n${context}` : ''}`,
+      max_tokens: 1500,
+      system: systemPrompt,
       messages: [{ role: 'user', content: message }],
     }),
   });

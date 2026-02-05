@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { api, GenerateResult, GeneratedFile } from '@/lib/api';
 import { useProjectStore } from '@/stores/projectStore';
@@ -380,7 +380,7 @@ const simulateGeneration = async (
 
 export function useGenerateProject(options: UseGenerateProjectOptions = {}) {
   const { streaming = false, onSuccess, onError, demoMode = false, model = 'gemini-2.5-flash' } = options;
-  const { setProject, addFile, setLoading, reset: resetProjectStore, project } = useProjectStore();
+  const { setProject, setProjectWithBackup, addFile, setLoading, reset: resetProjectStore, project } = useProjectStore();
   
   const [progress, setProgress] = useState<GenerationProgress>({
     stage: 'analyzing',
@@ -389,6 +389,22 @@ export function useGenerateProject(options: UseGenerateProjectOptions = {}) {
   });
   const [streamedFiles, setStreamedFiles] = useState<GeneratedFile[]>([]);
   const [currentModel, setCurrentModel] = useState<AIModel>(model);
+  
+  // AbortController for cancellation
+  const abortControllerRef = useRef<AbortController | null>(null);
+  
+  // Cancel current generation
+  const cancelGeneration = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setProgress({
+        stage: 'analyzing',
+        message: 'Генерация отменена',
+        progress: 0,
+      });
+    }
+  }, []);
 
   // Function to generate with real AI API
   const generateWithAI = async (prompt: string, selectedModel: AIModel, userApiKey?: string, provider?: string, autoSelectKey?: boolean, userId?: string, isEdit?: boolean): Promise<GenerateResult> => {
@@ -462,10 +478,14 @@ Please modify the existing project based on the user's request. Keep existing fu
       existingFilesCount: existingFiles.length,
     });
     
+    // Create new AbortController for this request
+    abortControllerRef.current = new AbortController();
+    
     const response = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
+      signal: abortControllerRef.current.signal,
     });
     
     console.log('[useGenerateProject] Response status:', response.status);
@@ -606,14 +626,21 @@ Please modify the existing project based on the user's request. Keep existing fu
       
       // Get current project from store - files were already added progressively
       const currentProject = useProjectStore.getState().project;
+      const isEditMode = typeof mutation.variables === 'object' && mutation.variables?.isEdit;
       
       if (currentProject) {
-        // Just update the status to 'active' - files are already there
-        setProject({
+        const updatedProject = {
           ...currentProject,
           status: 'active',
           updated_at: new Date().toISOString(),
-        });
+        };
+        
+        // Use setProjectWithBackup for edits to properly track changes
+        if (isEditMode && promptText) {
+          setProjectWithBackup(updatedProject, promptText);
+        } else {
+          setProject(updatedProject, true); // skipBackup=true for new projects
+        }
       }
       
       onSuccess?.(result);
@@ -670,6 +697,7 @@ Please modify the existing project based on the user's request. Keep existing fu
     reset,
     currentModel,
     setCurrentModel,
+    cancelGeneration,
   };
 }
 

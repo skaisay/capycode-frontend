@@ -22,7 +22,13 @@ import {
   Code2,
   Sparkles,
   Key,
-  ExternalLink
+  ExternalLink,
+  Terminal,
+  Bug,
+  Square,
+  Undo2,
+  History,
+  X
 } from 'lucide-react';
 import { useGenerateProject } from '@/hooks/useGenerateProject';
 import { useProjectStore } from '@/stores/projectStore';
@@ -31,6 +37,7 @@ import { getApiKeys, DBApiKey } from '@/lib/database';
 import { useAuth } from '@/hooks/useAuth';
 import { AI_MODELS, AIModel, getDefaultModel } from '@/lib/ai';
 import { motion, AnimatePresence } from 'framer-motion';
+import TerminalComponent from '@/components/ide/Terminal';
 
 interface AIPromptPanelProps {
   isGenerating: boolean;
@@ -41,6 +48,9 @@ interface AIPromptPanelProps {
     currentFile?: string;
   };
   initialPrompt?: string; // Prompt from dashboard
+  onStopGeneration?: () => void; // Stop generation callback
+  elementSelectionText?: string; // Text describing selected elements from Preview
+  onClearElementSelection?: () => void; // Clear selected elements
 }
 
 interface AIStatus {
@@ -57,7 +67,11 @@ interface ChatMessage {
   content: string;
   timestamp: number;
   files?: string[];
-  status?: 'thinking' | 'editing' | 'searching' | 'complete' | 'error';
+  status?: 'thinking' | 'editing' | 'searching' | 'terminal' | 'checking' | 'complete' | 'error';
+  terminalCommand?: string;
+  currentFile?: string;
+  processedFiles?: string[];
+  action?: 'generating' | 'editing' | 'restoring' | 'terminal';
 }
 
 const SUGGESTIONS = [
@@ -103,7 +117,7 @@ function saveSelectedKey(keyId: string | null) {
   }
 }
 
-export function AIPromptPanel({ isGenerating, progress, initialPrompt }: AIPromptPanelProps) {
+export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGeneration, elementSelectionText, onClearElementSelection }: AIPromptPanelProps) {
   // Model and API key are now stored in localStorage (set by dashboard/IDELayout)
   const [prompt, setPrompt] = useState('');
   const [selectedModel, setSelectedModel] = useState<AIModel>(getDefaultModel());
@@ -115,12 +129,30 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt }: AIPromp
   const [userApiKeys, setUserApiKeys] = useState<UserApiKey[]>([]);
   const [selectedUserKey, setSelectedUserKey] = useState<string | null>(getSavedSelectedKey());
   const [hasProcessedInitialPrompt, setHasProcessedInitialPrompt] = useState(false);
+  const [showBackupsDropdown, setShowBackupsDropdown] = useState(false);
+  const [showTerminal, setShowTerminal] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const [showElementSelection, setShowElementSelection] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const backupsDropdownRef = useRef<HTMLDivElement>(null);
   
   const { user } = useAuth();
-  const { project } = useProjectStore();
+  const { project, getBackups, undoLastChange } = useProjectStore();
 
   const { generateProject } = useGenerateProject();
+  
+  // Show element selection badge when elements are selected
+  useEffect(() => {
+    if (elementSelectionText) {
+      setShowElementSelection(true);
+    }
+  }, [elementSelectionText]);
+  
+  // Check if undo is available
+  useEffect(() => {
+    const backups = getBackups();
+    setCanUndo(backups.length > 0);
+  }, [project, getBackups]);
 
   // Load user API keys
   useEffect(() => {
@@ -199,6 +231,20 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt }: AIPromp
       console.error('Failed to validate key:', key.name, error);
     }
   };
+
+  // Close backups dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (backupsDropdownRef.current && !backupsDropdownRef.current.contains(event.target as Node)) {
+        setShowBackupsDropdown(false);
+      }
+    };
+    
+    if (showBackupsDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showBackupsDropdown]);
 
   // Load chat history from localStorage
   useEffect(() => {
@@ -322,16 +368,17 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt }: AIPromp
         setCurrentStatus('editing');
       }
       
-      // Update the "thinking" message with progress info
-      const progressText = progress.currentFile 
-        ? `Generating **${progress.currentFile}**... (${progress.progress}%)`
-        : progress.message 
-          ? `${progress.message} (${progress.progress}%)`
-          : 'Analyzing your request...';
-          
+      // Update the "thinking" message with progress info and current file
       setChatHistory(prev => prev.map(msg => 
         msg.status === 'thinking' 
-          ? { ...msg, content: progressText }
+          ? { 
+              ...msg, 
+              content: progress.currentFile 
+                ? `Обработка файла...`
+                : progress.message || 'Выполнение задачи...',
+              currentFile: progress.currentFile,
+              action: 'editing'
+            }
           : msg
       ));
     } else {
@@ -352,6 +399,60 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt }: AIPromp
     }
   };
 
+  // Render message content with code blocks support
+  const renderMessageContent = (content: string) => {
+    // Split by code blocks (```language\ncode\n```)
+    const parts = content.split(/(```[\s\S]*?```)/g);
+    
+    return parts.map((part, index) => {
+      // Check if this is a code block
+      if (part.startsWith('```') && part.endsWith('```')) {
+        const lines = part.slice(3, -3).split('\n');
+        const language = lines[0].trim() || 'code';
+        const code = lines.slice(1).join('\n');
+        
+        return (
+          <div key={index} className="my-3 rounded-lg overflow-hidden bg-[#0a0a0b] border border-[#1f1f23]">
+            <div className="flex items-center justify-between px-3 py-1.5 bg-[#111113] border-b border-[#1f1f23]">
+              <span className="text-xs text-[#6b6b70] font-mono">{language}</span>
+              <button
+                onClick={() => navigator.clipboard.writeText(code)}
+                className="text-xs text-[#6b6b70] hover:text-white transition-colors"
+              >
+                Copy
+              </button>
+            </div>
+            <pre className="p-3 overflow-x-auto text-xs">
+              <code className="text-[#e5e5e5] font-mono whitespace-pre">{code}</code>
+            </pre>
+          </div>
+        );
+      }
+      
+      // Regular text - render with bold support
+      return (
+        <span key={index}>
+          {part.split(/(\*\*[^*]+\*\*)/g).map((segment, i) => {
+            if (segment.startsWith('**') && segment.endsWith('**')) {
+              return <strong key={i} className="font-semibold text-white">{segment.slice(2, -2)}</strong>;
+            }
+            // Handle inline code `code`
+            return segment.split(/(`[^`]+`)/g).map((inlineSegment, j) => {
+              if (inlineSegment.startsWith('`') && inlineSegment.endsWith('`')) {
+                return (
+                  <code key={`${i}-${j}`} className="px-1.5 py-0.5 rounded bg-[#1f1f23] text-emerald-400 text-xs font-mono">
+                    {inlineSegment.slice(1, -1)}
+                  </code>
+                );
+              }
+              return inlineSegment;
+            });
+          })}
+        </span>
+      );
+    });
+  };
+
   const handleNewChat = () => {
     setChatHistory([]);
     localStorage.removeItem(CHAT_STORAGE_KEY);
@@ -363,79 +464,98 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt }: AIPromp
     }
   };
 
+  // Detect terminal/restore/undo commands
+  const detectSpecialCommand = (text: string): { type: 'terminal' | 'restore' | 'expo' | null; command?: string } => {
+    const lowerText = text.toLowerCase().trim();
+    
+    // Restore/Undo commands
+    if (/\b(верни|вернуть|откати|откатить|undo|restore|revert|назад|предыдущ|отменить)\b/i.test(lowerText)) {
+      return { type: 'restore' };
+    }
+    
+    // Expo/Terminal commands
+    if (/\b(запусти|запустить|start|run|expo|сервер|server|qr|qr-код|терминал|terminal|открой|открыть)\b/i.test(lowerText)) {
+      if (/\b(expo|приложен|app)\b/i.test(lowerText)) {
+        return { type: 'expo', command: 'npx expo start' };
+      }
+      if (/\b(сервер|server)\b/i.test(lowerText)) {
+        return { type: 'terminal', command: 'npm start' };
+      }
+    }
+    
+    // Console/Debug commands
+    if (/\b(консоль|console|лог|log|ошибк|error|debug)\b/i.test(lowerText)) {
+      return { type: 'terminal', command: 'check-console' };
+    }
+    
+    return { type: null };
+  };
+
   // Detect if the prompt is a question (should chat) or a generation request
   const isQuestionPrompt = (text: string): boolean => {
     const lowerText = text.toLowerCase().trim();
     
-    // FIRST: Check for explicit generation requests (these ALWAYS generate)
-    const generationPatterns = [
-      // English - explicit creation
-      /\b(create|build|make|generate|design|implement|develop)\b.*(app|application|screen|page|component|feature|button|form|layout)/i,
-      /^(create|build|make|generate)\s/i,
-      // Russian - explicit creation  
-      /\b(создай|сделай|построй|сгенерируй|напиши код|разработай)\b/i,
+    // FIRST: Check for special commands
+    const specialCmd = detectSpecialCommand(text);
+    if (specialCmd.type) {
+      return false; // Handle as action, not question
+    }
+    
+    // SECOND: Check for ACTION/EDIT/CREATE requests (these ALWAYS generate code)
+    // This runs BEFORE question detection to handle "привет, создай приложение"
+    const actionPatterns = [
+      // English - explicit creation (anywhere in text)
+      /\b(create|build|make|generate|design|implement|develop)\b/i,
+      // Russian - explicit creation (anywhere in text) 
+      /\b(создай|создать|сделай|построй|сгенерируй|напиши код|разработай)\b/i,
+      /(приложение|application|app)\b/i,
       /(новое приложение|new app|from scratch|с нуля)/i,
       // Add/modify specific elements
-      /\b(add|добавь)\b.*(button|screen|page|кнопк|экран|страниц)/i,
+      /\b(add|добавь|добавить)\b/i,
+      // CHANGE/MODIFY/EDIT requests
+      /\b(change|modify|edit|update|fix|replace|remove|delete|adjust)\b/i,
+      /\b(измени|изменить|поменяй|поменять|замени|заменить|удали|удалить|убери|убрать|исправь|исправить|обнови|обновить)\b/i,
+      // Color/style changes
+      /\b(color|цвет|стиль|style|background|фон)\b/i,
+      // "Can you create/make" - these are requests, not questions
+      /(can you|could you|would you|please|можешь|можешь ли|пожалуйста).*(create|make|build|change|modify|edit|add|создать|сделать|изменить|добавить)/i,
     ];
     
-    for (const pattern of generationPatterns) {
+    for (const pattern of actionPatterns) {
       if (pattern.test(lowerText)) {
-        console.log('[isQuestionPrompt] Detected GENERATION request:', lowerText.slice(0, 50));
-        return false;
+        console.log('[isQuestionPrompt] Detected ACTION/CREATE request:', lowerText.slice(0, 50));
+        return false; // This is a generation request
       }
     }
     
-    // SECOND: Check for questions (these should NOT generate code)
-    const questionPatterns = [
-      // Question marks
-      /\?$/,
-      // English question words (anywhere in text)
-      /\b(what|why|how|explain|describe|tell|can you|could you|would you|help me understand)\b/i,
-      // Russian question words and phrases (anywhere) - all forms!
-      /\b(что|почему|зачем|как|кто|где|когда|какой|какая|какие)\b/i,
-      // Russian verbs for "tell me" / "explain" in ALL forms
-      /(расскажи|рассказать|рассказывай|расскажите)/i,
-      /(объясни|объяснить|объясните|объясняй)/i,
-      /(подскажи|подсказать|подскажите)/i,
-      /(покажи|показать|покажите)/i,
-      /(скажи|сказать|скажите)/i,
-      /(помоги|помочь|помогите)/i,
-      /(опиши|описать|опишите)/i,
-      // "What you did" phrases
-      /(что ты|что это|как это|зачем это|почему это)/i,
+    // THIRD: Check for pure questions (ONLY these should NOT generate code)
+    // Only matches if NO action patterns were found above
+    const pureQuestionPatterns = [
+      // Console/debug commands - DO NOT GENERATE CODE
+      /(посмотри|проверь|покажи|открой).*(консоль|лог|ошибк|терминал|error|log|console)/i,
+      /(check|show|look|view|see).*(console|log|error|terminal|output)/i,
+      /^(консоль|console|лог|log|ошибк|error)$/i,
+      // Purely informational questions
+      /^(what is|why is|how does|explain|describe)\b/i,
+      /^(что такое|что это|как работает|зачем нужен|почему так)/i,
+      // "Tell me about" (informational)
+      /(расскажи|рассказать|объясни|объяснить|подскажи|подсказать)\s+(что|как|почему|зачем)/i,
       /(что ты сделал|что сделала|что было сделано)/i,
-      // Conversational phrases
-      /(привет|hello|hi there|hey|здравствуй)/i,
-      /(спасибо|thanks|thank you|благодар)/i,
-      /(посоветуй|recommend|suggest|what do you think)/i,
-      // "Only you can" / modal phrases  
-      /(только ты|можешь ли ты|ты можешь)/i,
+      // Pure greetings (only if nothing else follows)
+      /^(привет|hello|hi|hey|здравствуй)[\s!.]*$/i,
+      // Pure thanks
+      /^(спасибо|thanks|thank you)[\s!.]*$/i,
     ];
     
-    for (const pattern of questionPatterns) {
+    for (const pattern of pureQuestionPatterns) {
       if (pattern.test(lowerText)) {
-        console.log('[isQuestionPrompt] Detected QUESTION:', lowerText.slice(0, 50));
+        console.log('[isQuestionPrompt] Detected PURE QUESTION:', lowerText.slice(0, 50));
         return true;
       }
     }
     
-    // THIRD: If we have a project already, short messages are likely questions/edits
-    const hasExistingProject = !!project && project.files.length > 0;
-    const wordCount = lowerText.split(/\s+/).length;
-    
-    if (hasExistingProject && wordCount < 15) {
-      console.log('[isQuestionPrompt] Short message with existing project, treating as QUESTION');
-      return true;
-    }
-    
-    // Default: if unsure and project exists, ask don't generate
-    if (hasExistingProject) {
-      console.log('[isQuestionPrompt] Project exists, defaulting to QUESTION');
-      return true;
-    }
-    
-    console.log('[isQuestionPrompt] No project, defaulting to GENERATION');
+    // FOURTH: Default to GENERATION for everything else
+    console.log('[isQuestionPrompt] Defaulting to GENERATION');
     return false;
   };
 
@@ -445,15 +565,27 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt }: AIPromp
       // Get user's API key
       const selectedKey = selectedUserKey ? userApiKeys.find(k => k.id === selectedUserKey) : null;
       
-      // Build context from current project
+      // Build RICH context from current project
       let context = '';
       if (project && project.files.length > 0) {
         context = `Current project: ${project.name || 'Untitled'}\n`;
-        context += `Files: ${project.files.map(f => f.path).join(', ')}\n`;
-        // Include some code context
+        context += `Description: ${project.description || 'Mobile app'}\n`;
+        context += `Total files: ${project.files.length}\n`;
+        context += `Files: ${project.files.map(f => f.path).join(', ')}\n\n`;
+        
+        // Include App.tsx or main file
         const mainFile = project.files.find(f => f.path.includes('App.tsx') || f.path.includes('index.tsx'));
         if (mainFile) {
-          context += `\nMain file (${mainFile.path}):\n${mainFile.content.slice(0, 2000)}`;
+          context += `=== Main App File (${mainFile.path}) ===\n${mainFile.content.slice(0, 3000)}\n\n`;
+        }
+        
+        // Include screens if any
+        const screens = project.files.filter(f => f.path.includes('screen') || f.path.includes('Screen'));
+        if (screens.length > 0) {
+          context += `=== Screens ===\n`;
+          screens.forEach(s => {
+            context += `${s.path}: ${s.content.slice(0, 500)}...\n`;
+          });
         }
       }
       
@@ -496,31 +628,195 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt }: AIPromp
     }
   };
 
+  // Handle restore/undo command
+  const handleRestoreCommand = (messageId: string) => {
+    const backups = useProjectStore.getState().getBackups();
+    
+    if (backups.length === 0) {
+      const noBackupMessage: ChatMessage = {
+        id: messageId,
+        role: 'assistant',
+        content: '**Нет доступных резервных копий**\n\nИстория изменений пуста. Резервные копии создаются автоматически перед каждым изменением проекта.',
+        timestamp: Date.now(),
+        status: 'complete',
+      };
+      setChatHistory(prev => prev.map(msg => msg.id === messageId ? noBackupMessage : msg));
+      return;
+    }
+    
+    // Restore to latest backup
+    useProjectStore.getState().undoLastChange();
+    
+    const successMessage: ChatMessage = {
+      id: messageId,
+      role: 'assistant',
+      content: `✅ **Изменения отменены**\n\nПроект восстановлен к предыдущей версии.\n\nДоступно ещё **${backups.length - 1}** резервных копий.`,
+      timestamp: Date.now(),
+      status: 'complete',
+      action: 'restoring',
+    };
+    setChatHistory(prev => prev.map(msg => msg.id === messageId ? successMessage : msg));
+  };
+
+  // Handle expo/terminal command
+  const handleTerminalCommand = (messageId: string, command: string) => {
+    if (command === 'npx expo start') {
+      // Open real terminal with E2B sandbox
+      setShowTerminal(true);
+      
+      const expoMessage: ChatMessage = {
+        id: messageId,
+        role: 'assistant',
+        content: `**🚀 Запускаю терминал**\n\nОткрываю терминал для запуска приложения. Нажмите **Start Expo** в терминале для получения QR-кода.\n\n> 💡 Отсканируйте QR-код в **Expo Go** на вашем телефоне\n> 📱 [App Store](https://apps.apple.com/app/expo-go/id982107779) | [Google Play](https://play.google.com/store/apps/details?id=host.exp.exponent)`,
+        timestamp: Date.now(),
+        status: 'complete',
+        terminalCommand: command,
+        action: 'terminal',
+      };
+      setChatHistory(prev => prev.map(msg => msg.id === messageId ? expoMessage : msg));
+    } else if (command === 'check-console') {
+      // Actually check the code for potential errors
+      const currentProject = useProjectStore.getState().project;
+      let errorsList: string[] = [];
+      let warningsList: string[] = [];
+      
+      if (currentProject && currentProject.files.length > 0) {
+        currentProject.files.forEach(file => {
+          if (file.path.endsWith('.tsx') || file.path.endsWith('.ts') || file.path.endsWith('.js')) {
+            const content = file.content;
+            
+            // Check for common issues
+            if (content.includes('undefined') && content.includes('?.') === false) {
+              warningsList.push(`${file.path}: Возможно необработанное undefined`);
+            }
+            if (content.includes('console.error') || content.includes('console.warn')) {
+              warningsList.push(`${file.path}: Есть отладочные console.error/warn`);
+            }
+            if (content.match(/import.*from\s+['"][^'"]+['"]/g)) {
+              const imports = content.match(/import.*from\s+['"]([^'"]+)['"]/g) || [];
+              imports.forEach(imp => {
+                if (imp.includes('./') && !imp.includes('.tsx') && !imp.includes('.ts')) {
+                  // Check if imported file exists
+                  const match = imp.match(/from\s+['"]([^'"]+)['"]/);
+                  if (match) {
+                    const importPath = match[1];
+                    const resolved = file.path.split('/').slice(0, -1).join('/') + '/' + importPath.replace('./', '');
+                    const exists = currentProject.files.some(f => 
+                      f.path === resolved + '.tsx' || 
+                      f.path === resolved + '.ts' || 
+                      f.path === resolved + '/index.tsx' ||
+                      f.path === resolved + '/index.ts'
+                    );
+                    if (!exists && !importPath.startsWith('@') && !importPath.startsWith('react') && !importPath.startsWith('expo')) {
+                      warningsList.push(`${file.path}: Импорт "${importPath}" может не существовать`);
+                    }
+                  }
+                }
+              });
+            }
+            // Check for syntax-like issues
+            if ((content.match(/{/g) || []).length !== (content.match(/}/g) || []).length) {
+              errorsList.push(`${file.path}: Несбалансированные фигурные скобки`);
+            }
+            if ((content.match(/\(/g) || []).length !== (content.match(/\)/g) || []).length) {
+              errorsList.push(`${file.path}: Несбалансированные круглые скобки`);
+            }
+          }
+        });
+      }
+      
+      let resultContent = '**🔍 Проверка кода**\n\n';
+      
+      if (errorsList.length === 0 && warningsList.length === 0) {
+        resultContent += '✅ **Ошибок не обнаружено!**\n\nКод выглядит корректно. Если вы видите проблемы в превью, опишите их — я исправлю.';
+      } else {
+        if (errorsList.length > 0) {
+          resultContent += '**❌ Ошибки:**\n';
+          errorsList.forEach(e => resultContent += `- ${e}\n`);
+          resultContent += '\n';
+        }
+        if (warningsList.length > 0) {
+          resultContent += '**⚠️ Предупреждения:**\n';
+          warningsList.slice(0, 5).forEach(w => resultContent += `- ${w}\n`);
+          if (warningsList.length > 5) {
+            resultContent += `- ... и ещё ${warningsList.length - 5}\n`;
+          }
+        }
+        resultContent += '\n> Хотите, чтобы я исправил эти проблемы?';
+      }
+      
+      const consoleMessage: ChatMessage = {
+        id: messageId,
+        role: 'assistant',
+        content: resultContent,
+        timestamp: Date.now(),
+        status: 'complete',
+        action: 'terminal',
+      };
+      setChatHistory(prev => prev.map(msg => msg.id === messageId ? consoleMessage : msg));
+    } else {
+      const terminalMessage: ChatMessage = {
+        id: messageId,
+        role: 'assistant',
+        content: `**💻 Команда терминала**\n\n\`\`\`bash\n${command}\n\`\`\`\n\nЭта команда будет доступна после экспорта проекта.`,
+        timestamp: Date.now(),
+        status: 'complete',
+        terminalCommand: command,
+        action: 'terminal',
+      };
+      setChatHistory(prev => prev.map(msg => msg.id === messageId ? terminalMessage : msg));
+    }
+  };
+
   const handleSubmit = async () => {
     if (!prompt.trim() || isGenerating) return;
+
+    // Combine element selection with user prompt if available
+    let fullPrompt = prompt;
+    if (showElementSelection && elementSelectionText) {
+      fullPrompt = `${elementSelectionText}\n\n${prompt}`;
+      // Clear element selection after using it
+      setShowElementSelection(false);
+      if (onClearElementSelection) {
+        onClearElementSelection();
+      }
+    }
 
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
-      content: prompt,
+      content: fullPrompt,
       timestamp: Date.now(),
     };
 
     setChatHistory(prev => [...prev, userMessage]);
-    const userPrompt = prompt;
+    const userPrompt = fullPrompt;
     setPrompt('');
     setCurrentStatus('thinking');
 
-    // Add a "thinking" message that will be updated
+    // Add a "working" message that will be updated
     const thinkingMessageId = (Date.now() + 0.5).toString();
     const thinkingMessage: ChatMessage = {
       id: thinkingMessageId,
       role: 'assistant',
-      content: 'Analyzing your request...',
+      content: 'Выполнение задачи...',
       timestamp: Date.now(),
       status: 'thinking',
     };
     setChatHistory(prev => [...prev, thinkingMessage]);
+
+    // Check for special commands first
+    const specialCmd = detectSpecialCommand(userPrompt);
+    if (specialCmd.type === 'restore') {
+      handleRestoreCommand(thinkingMessageId);
+      setCurrentStatus('idle');
+      return;
+    }
+    if (specialCmd.type === 'expo' || specialCmd.type === 'terminal') {
+      handleTerminalCommand(thinkingMessageId, specialCmd.command || '');
+      setCurrentStatus('idle');
+      return;
+    }
 
     // Check if this is just a question or a generation request
     const isQuestion = isQuestionPrompt(userPrompt);
@@ -733,7 +1029,70 @@ ${err.message || 'An unexpected error occurred.'}
     setPrompt(suggestionPrompt);
   };
 
+  // Handle undo button click
+  const handleUndo = () => {
+    const backups = useProjectStore.getState().getBackups();
+    if (backups.length === 0) {
+      // Show message that no backups available
+      const message: ChatMessage = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: '**Нет доступных резервных копий**\n\nИстория изменений пуста.',
+        timestamp: Date.now(),
+        status: 'complete',
+      };
+      setChatHistory(prev => [...prev, message]);
+      return;
+    }
+    
+    useProjectStore.getState().undoLastChange();
+    
+    const message: ChatMessage = {
+      id: Date.now().toString(),
+      role: 'assistant',
+      content: `✅ **Изменения отменены**\n\nПроект восстановлен к предыдущей версии.`,
+      timestamp: Date.now(),
+      status: 'complete',
+      action: 'restoring',
+    };
+    setChatHistory(prev => [...prev, message]);
+    setShowBackupsDropdown(false);
+  };
+
+  // Handle restore to specific backup
+  const handleRestoreToBackup = (backupId: string, description: string) => {
+    useProjectStore.getState().restoreBackup(backupId);
+    
+    const message: ChatMessage = {
+      id: Date.now().toString(),
+      role: 'assistant',
+      content: `✅ **Восстановлено**\n\nПроект восстановлен к версии: "${description}"`,
+      timestamp: Date.now(),
+      status: 'complete',
+      action: 'restoring',
+    };
+    setChatHistory(prev => [...prev, message]);
+    setShowBackupsDropdown(false);
+  };
+
+  // Format timestamp for display
+  const formatBackupTime = (timestamp: number): string => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    
+    if (diffMins < 1) return 'Только что';
+    if (diffMins < 60) return `${diffMins} мин. назад`;
+    if (diffHours < 24) return `${diffHours} ч. назад`;
+    
+    return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  };
+
   const currentModel = AI_MODELS.find(m => m.id === selectedModel);
+  const backups = useProjectStore.getState().getBackups();
+  const backupsCount = backups.length;
 
   return (
     <div className="h-full flex flex-col bg-[#0a0a0b]">
@@ -750,6 +1109,76 @@ ${err.message || 'An unexpected error occurred.'}
             <span className="text-xs text-[#9a9aa0]">New</span>
           </button>
           
+          {/* Undo Button with Dropdown */}
+          {project && backupsCount > 0 && (
+            <div className="relative" ref={backupsDropdownRef}>
+              <button
+                onClick={() => setShowBackupsDropdown(!showBackupsDropdown)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 transition-colors"
+                title={`Undo (${backupsCount} backups available)`}
+              >
+                <svg className="w-3.5 h-3.5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                </svg>
+                <span className="text-xs text-amber-400">Undo</span>
+                <ChevronDown className={`w-3 h-3 text-amber-400 transition-transform ${showBackupsDropdown ? 'rotate-180' : ''}`} />
+              </button>
+              
+              {/* Backups Dropdown */}
+              <AnimatePresence>
+                {showBackupsDropdown && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute top-full left-0 mt-1 w-72 max-h-80 overflow-y-auto bg-[#111113] border border-[#1f1f23] rounded-xl shadow-xl z-50"
+                  >
+                    <div className="p-2 border-b border-[#1f1f23]">
+                      <p className="text-xs text-[#6b6b70] px-2">История изменений ({backupsCount})</p>
+                    </div>
+                    <div className="p-1">
+                      {/* Quick Undo - latest backup */}
+                      <button
+                        onClick={handleUndo}
+                        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-amber-500/10 transition-colors text-left group"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-amber-500/20 flex items-center justify-center shrink-0">
+                          <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                          </svg>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-white font-medium">Отменить последнее</p>
+                          <p className="text-xs text-[#6b6b70]">Быстрый откат</p>
+                        </div>
+                      </button>
+                      
+                      <div className="h-px bg-[#1f1f23] my-1" />
+                      
+                      {/* All backups */}
+                      {backups.map((backup, index) => (
+                        <button
+                          key={backup.id}
+                          onClick={() => handleRestoreToBackup(backup.id, backup.description)}
+                          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-[#1f1f23] transition-colors text-left group"
+                        >
+                          <div className="w-8 h-8 rounded-lg bg-[#1f1f23] group-hover:bg-[#2a2a2e] flex items-center justify-center shrink-0">
+                            <span className="text-xs text-[#6b6b70] font-mono">#{backups.length - index}</span>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-[#e5e5e5] truncate">{backup.description}</p>
+                            <p className="text-xs text-[#6b6b70]">{formatBackupTime(backup.timestamp)} • {backup.files.length} файлов</p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+          
           {/* Clear Button */}
           <button
             onClick={handleClearChat}
@@ -760,8 +1189,39 @@ ${err.message || 'An unexpected error occurred.'}
           </button>
         </div>
 
-        {/* Status Indicator */}
+        {/* Status Indicators Row */}
         <div className="flex items-center gap-2">
+          {/* Terminal Indicator - shows when AI is running commands */}
+          <AnimatePresence>
+            {currentStatus === 'editing' && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-purple-500/10"
+              >
+                <Terminal className="w-3 h-3 text-purple-400 animate-pulse" />
+                <span className="text-[10px] text-purple-400 font-medium">Terminal</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+          
+          {/* Console/Debug Indicator - shows when checking for errors */}
+          <AnimatePresence>
+            {isGenerating && progress.stage === 'validation' && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-orange-500/10"
+              >
+                <Bug className="w-3 h-3 text-orange-400 animate-pulse" />
+                <span className="text-[10px] text-orange-400 font-medium">Console</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+          
+          {/* API Key / Connection Status */}
           {selectedUserKey ? (
             <div className="flex items-center gap-1.5 px-2 py-1 rounded-full bg-blue-500/10">
               <Key className="w-3 h-3 text-blue-400" />
@@ -839,7 +1299,7 @@ ${err.message || 'An unexpected error occurred.'}
                       <div className="p-4 rounded-xl bg-red-500/5 border border-red-500/20">
                         <div className="flex items-center gap-2 mb-3">
                           <AlertTriangle className="w-4 h-4 text-red-400" />
-                          <span className="text-sm font-medium text-red-400">Error</span>
+                          <span className="text-sm font-medium text-red-400">Ошибка</span>
                         </div>
                         <div className="text-sm text-[#e5e5e5] leading-relaxed whitespace-pre-wrap">
                           {message.content.split('**').map((part, i) => 
@@ -847,24 +1307,83 @@ ${err.message || 'An unexpected error occurred.'}
                           )}
                         </div>
                       </div>
+                    ) : message.status === 'thinking' ? (
+                      /* Working status with file indicator */
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-sm text-[#9a9aa0]">
+                          <motion.div
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                          >
+                            <Loader2 className="w-4 h-4 text-emerald-500" />
+                          </motion.div>
+                          <span>Выполнение задачи...</span>
+                        </div>
+                        
+                        {/* Current file being processed */}
+                        {message.currentFile && (
+                          <motion.div 
+                            initial={{ opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            className="flex items-center gap-2 text-xs py-1.5 px-3 bg-[#111113] rounded-lg border border-[#1f1f23]/50"
+                          >
+                            <motion.div
+                              animate={{ scale: [1, 1.2, 1] }}
+                              transition={{ duration: 0.6, repeat: Infinity }}
+                              className="w-2 h-2 rounded-full bg-emerald-500"
+                            />
+                            <FileCode className="w-3.5 h-3.5 text-[#6b6b70]" />
+                            <span className="font-mono text-[#e5e5e5]">{message.currentFile}</span>
+                          </motion.div>
+                        )}
+                      </div>
                     ) : (
                       <>
-                        <p className="text-sm text-[#e5e5e5] leading-relaxed">
-                          {message.content}
-                        </p>
+                        {/* Action indicator for completed messages */}
+                        {message.action === 'restoring' && (
+                          <div className="flex items-center gap-2 mb-2 text-xs text-amber-400">
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                            </svg>
+                            <span>Восстановление</span>
+                          </div>
+                        )}
+                        {message.action === 'terminal' && (
+                          <div className="flex items-center gap-2 mb-2 text-xs text-blue-400">
+                            <Terminal className="w-4 h-4" />
+                            <span>Терминал</span>
+                          </div>
+                        )}
                         
-                        {/* Files Modified */}
+                        <div className="text-sm text-[#e5e5e5] leading-relaxed prose prose-invert prose-sm max-w-none">
+                          {renderMessageContent(message.content)}
+                        </div>
+                        
+                        {/* Files Modified - with staggered animation */}
                         {message.files && message.files.length > 0 && (
                           <div className="mt-3 space-y-1">
                             {message.files.map((file, idx) => (
-                              <div 
+                              <motion.div 
                                 key={idx}
+                                initial={{ opacity: 0, x: -10 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                transition={{ 
+                                  delay: idx * 0.1, 
+                                  duration: 0.3,
+                                  ease: "easeOut" 
+                                }}
                                 className="flex items-center gap-2 text-xs text-[#6b6b70] py-1"
                               >
-                                <Check className="w-3.5 h-3.5 text-emerald-500" />
+                                <motion.div
+                                  initial={{ scale: 0 }}
+                                  animate={{ scale: 1 }}
+                                  transition={{ delay: idx * 0.1 + 0.2 }}
+                                >
+                                  <Check className="w-3.5 h-3.5 text-emerald-500" />
+                                </motion.div>
                                 <FileCode className="w-3.5 h-3.5" />
                                 <span className="font-mono">{file}</span>
-                              </div>
+                              </motion.div>
                             ))}
                           </div>
                         )}
@@ -909,6 +1428,37 @@ ${err.message || 'An unexpected error occurred.'}
                       </>
                     )}
                   </div>
+                  
+                  {/* Terminal Command Display */}
+                  {progress.stage === 'terminal' && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      className="p-2 rounded-lg bg-[#0a0a0b] border border-[#1f1f23]"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <Terminal className="w-3 h-3 text-purple-400" />
+                        <span className="text-[10px] text-purple-400 font-medium">Running command</span>
+                      </div>
+                      <code className="text-xs text-[#e5e5e5] font-mono">
+                        {progress.message || 'npm install...'}
+                      </code>
+                    </motion.div>
+                  )}
+                  
+                  {/* Console Check Display */}
+                  {progress.stage === 'validation' && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      className="p-2 rounded-lg bg-orange-500/5 border border-orange-500/20"
+                    >
+                      <div className="flex items-center gap-2">
+                        <Bug className="w-3 h-3 text-orange-400 animate-pulse" />
+                        <span className="text-[10px] text-orange-400 font-medium">Checking for errors...</span>
+                      </div>
+                    </motion.div>
+                  )}
 
                   {/* Progress Bar */}
                   <div className="h-1 bg-[#1f1f23] rounded-full overflow-hidden">
@@ -1057,6 +1607,36 @@ ${err.message || 'An unexpected error occurred.'}
         
         {/* Input Field */}
         <div className="relative bg-[#111113] rounded-xl border border-[#1f1f23]/50 focus-within:border-emerald-500/30 transition-colors">
+          {/* Selected Elements Badge */}
+          <AnimatePresence>
+            {showElementSelection && elementSelectionText && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 10 }}
+                className="absolute -top-12 left-0 right-0 z-10"
+              >
+                <div className="bg-emerald-500/20 border border-emerald-500/40 rounded-lg px-3 py-2 flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Eye className="w-4 h-4 text-emerald-400" />
+                    <span className="text-emerald-400 font-medium">{elementSelectionText}</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowElementSelection(false);
+                      if (onClearElementSelection) {
+                        onClearElementSelection();
+                      }
+                    }}
+                    className="text-emerald-400/60 hover:text-red-400 transition-colors p-1"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+          
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -1066,23 +1646,67 @@ ${err.message || 'An unexpected error occurred.'}
                 handleSubmit();
               }
             }}
-            placeholder="Describe what you want to build..."
+            placeholder={elementSelectionText ? "Что сделать с выбранными элементами?" : "Опишите, что хотите создать..."}
             disabled={isGenerating}
-            className="w-full h-20 px-4 py-3 pr-12 bg-transparent rounded-xl text-sm text-white placeholder-[#4a4a4e] resize-none focus:outline-none disabled:opacity-50"
+            className="w-full h-20 px-4 py-3 pr-28 bg-transparent rounded-xl text-sm text-white placeholder-[#4a4a4e] resize-none focus:outline-none disabled:opacity-50"
           />
-          <button
-            onClick={handleSubmit}
-            disabled={!prompt.trim() || isGenerating}
-            className="absolute right-2.5 bottom-2.5 p-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-          >
-            {isGenerating ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Send className="w-4 h-4" />
+          
+          {/* Action buttons */}
+          <div className="absolute right-2.5 bottom-2.5 flex items-center gap-1.5">
+            {/* Undo button - shown when there are backups and not generating */}
+            {canUndo && !isGenerating && (
+              <button
+                onClick={() => {
+                  undoLastChange();
+                  setChatHistory(prev => [...prev, {
+                    id: Date.now().toString(),
+                    role: 'assistant',
+                    content: '↩️ Изменения отменены. Проект восстановлен к предыдущей версии.',
+                    timestamp: Date.now(),
+                    status: 'complete',
+                  }]);
+                }}
+                className="p-2 bg-[#1f1f23] text-[#a1a1aa] rounded-lg hover:bg-[#2a2a2e] hover:text-white transition-all"
+                title="Отменить последнее изменение"
+              >
+                <Undo2 className="w-4 h-4" />
+              </button>
             )}
-          </button>
+            
+            {/* Stop button - shown during generation */}
+            {isGenerating && onStopGeneration && (
+              <button
+                onClick={onStopGeneration}
+                className="p-2 bg-red-600 text-white rounded-lg hover:bg-red-500 transition-all animate-pulse"
+                title="Остановить генерацию"
+              >
+                <Square className="w-4 h-4" />
+              </button>
+            )}
+            
+            {/* Send button */}
+            <button
+              onClick={handleSubmit}
+              disabled={!prompt.trim() || isGenerating}
+              className="p-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+              title={isGenerating ? "Генерация..." : "Отправить"}
+            >
+              {isGenerating ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4" />
+              )}
+            </button>
+          </div>
         </div>
       </div>
+      
+      {/* Terminal Component */}
+      <TerminalComponent 
+        isOpen={showTerminal}
+        onClose={() => setShowTerminal(false)}
+        projectId={project?.id}
+      />
     </div>
   );
 }
