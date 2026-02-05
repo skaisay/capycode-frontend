@@ -83,9 +83,7 @@ export function useDevToolsData(): DevToolsData {
 
       // For new projects, show empty history
       // For existing projects, only show history from current session
-      // Since generation_logs don't have project_id, we filter by today's date as approximation
-      const projectId = getCurrentProjectId();
-      
+      // Since generation_logs don't have project_id, we filter by last hour
       if (!projectId || projectId === 'new') {
         // New or no project - empty history
         setHistory([]);
