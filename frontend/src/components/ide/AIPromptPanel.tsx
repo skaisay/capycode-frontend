@@ -338,6 +338,8 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
     const key = userApiKeys.find(k => k.id === keyId);
     if (!key) return;
     
+    console.log('[applyKeyAndRetry] Applying key:', key.name, 'failedPrompt:', failedPrompt?.slice(0, 50));
+    
     // Save selected key and model
     setSelectedUserKey(keyId);
     if (model) {
@@ -350,68 +352,80 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
     setShowKeyChecker(false);
     
     // Retry the failed prompt with the NEW key directly
-    if (failedPrompt) {
-      const promptToRetry = failedPrompt;
-      setFailedPrompt(null);
-      
-      // Add user message
-      const userMessage: ChatMessage = {
+    if (!failedPrompt) {
+      // No failed prompt saved - show message to user
+      console.log('[applyKeyAndRetry] No failedPrompt, showing message');
+      const infoMessage: ChatMessage = {
         id: Date.now().toString(),
-        role: 'user',
-        content: promptToRetry,
+        role: 'assistant',
+        content: `✅ **Ключ "${key.name}" выбран!**\n\nТеперь напишите, какое приложение вы хотите создать.`,
         timestamp: Date.now(),
+        status: 'complete',
       };
-      setChatHistory(prev => [...prev, userMessage]);
+      setChatHistory(prev => [...prev, infoMessage]);
+      return;
+    }
+    
+    const promptToRetry = failedPrompt;
+    setFailedPrompt(null);
+    
+    // Add user message
+    const userMessage: ChatMessage = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: promptToRetry,
+      timestamp: Date.now(),
+    };
+    setChatHistory(prev => [...prev, userMessage]);
+    
+    // Add thinking message
+    const thinkingMessageId = (Date.now() + 0.5).toString();
+    const thinkingMessage: ChatMessage = {
+      id: thinkingMessageId,
+      role: 'assistant',
+      content: 'Повторяю с выбранным ключом...',
+      timestamp: Date.now(),
+      status: 'thinking',
+    };
+    setChatHistory(prev => [...prev, thinkingMessage]);
+    setCurrentStatus('thinking');
+    
+    try {
+      // Generate with the EXPLICITLY selected key
+      const result = await generateProject({
+        prompt: promptToRetry,
+        model: (model as AIModel) || selectedModel,
+        apiKey: key.encryptedKey,
+        provider: key.provider,
+        autoSelectKey: false, // We have a specific key
+        userId: user?.id,
+        isEdit: !!(project && project.files.length > 0),
+      });
       
-      // Add thinking message
-      const thinkingMessageId = (Date.now() + 0.5).toString();
-      const thinkingMessage: ChatMessage = {
+      // Success message
+      const appName = result?.expoConfig?.name || 'App';
+      const filesCount = result?.files?.length || 0;
+      const successMessage: ChatMessage = {
         id: thinkingMessageId,
         role: 'assistant',
-        content: 'Повторяю с выбранным ключом...',
+        content: `✅ **${appName}** сгенерирован успешно!\n\nИспользован ключ: **${key.name}**\nСоздано **${filesCount} файлов**\n\nПроверьте файлы слева и превью справа.`,
         timestamp: Date.now(),
-        status: 'thinking',
+        status: 'complete',
+        files: result?.files?.map((f: any) => f.path) || [],
       };
-      setChatHistory(prev => [...prev, thinkingMessage]);
-      setCurrentStatus('thinking');
-      
-      try {
-        // Generate with the EXPLICITLY selected key
-        const result = await generateProject({
-          prompt: promptToRetry,
-          model: (model as AIModel) || selectedModel,
-          apiKey: key.encryptedKey,
-          provider: key.provider,
-          autoSelectKey: false, // We have a specific key
-          userId: user?.id,
-          isEdit: !!(project && project.files.length > 0),
-        });
-        
-        // Success message
-        const appName = result?.expoConfig?.name || 'App';
-        const filesCount = result?.files?.length || 0;
-        const successMessage: ChatMessage = {
-          id: thinkingMessageId,
-          role: 'assistant',
-          content: `✅ **${appName}** сгенерирован успешно!\n\nИспользован ключ: **${key.name}**\nСоздано **${filesCount} файлов**\n\nПроверьте файлы слева и превью справа.`,
-          timestamp: Date.now(),
-          status: 'complete',
-          files: result?.files?.map((f: any) => f.path) || [],
-        };
-        setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? successMessage : msg));
-      } catch (err: any) {
-        const errorMessage: ChatMessage = {
-          id: thinkingMessageId,
-          role: 'assistant',
-          content: `**Ошибка**\n\n${err.message || 'Неизвестная ошибка'}\n\nПопробуйте другой ключ.`,
-          timestamp: Date.now(),
-          status: 'error',
-        };
-        setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? errorMessage : msg));
-        setFailedPrompt(promptToRetry);
-      } finally {
-        setCurrentStatus('idle');
-      }
+      setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? successMessage : msg));
+    } catch (err: any) {
+      const errorMessage: ChatMessage = {
+        id: thinkingMessageId,
+        role: 'assistant',
+        content: `**Ошибка**\n\n${err.message || 'Неизвестная ошибка'}\n\nПопробуйте другой ключ.`,
+        timestamp: Date.now(),
+        status: 'error',
+      };
+      setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? errorMessage : msg));
+      setFailedPrompt(promptToRetry);
+    } finally {
+      setCurrentStatus('idle');
     }
   };
 
@@ -735,13 +749,14 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
   const detectSpecialCommand = (text: string): { type: 'terminal' | 'restore' | 'expo' | null; command?: string } => {
     const lowerText = text.toLowerCase().trim();
     
-    // Restore/Undo commands
-    if (/\b(верни|вернуть|откати|откатить|undo|restore|revert|назад|предыдущ|отменить)\b/i.test(lowerText)) {
+    // Restore/Undo commands - only if explicit undo request
+    if (/^(верни|вернуть|откати|откатить|undo|restore|revert|отменить)$/i.test(lowerText) ||
+        /\b(верни|откати|undo)\s*(изменен|всё|все|последн|back)/i.test(lowerText)) {
       return { type: 'restore' };
     }
     
-    // Expo/Terminal commands
-    if (/\b(запусти|запустить|start|run|expo|сервер|server|qr|qr-код|терминал|terminal|открой|открыть)\b/i.test(lowerText)) {
+    // Expo/Terminal commands - only if explicit launch request
+    if (/\b(запусти|запустить|start|run)\b/i.test(lowerText) && /\b(expo|приложен|app|сервер|server)\b/i.test(lowerText)) {
       if (/\b(expo|приложен|app)\b/i.test(lowerText)) {
         return { type: 'expo', command: 'npx expo start' };
       }
@@ -750,8 +765,10 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
       }
     }
     
-    // Console/Debug commands
-    if (/\b(консоль|console|лог|log|ошибк|error|debug)\b/i.test(lowerText)) {
+    // Console/Debug commands - ONLY if explicitly asking to check/show console or logs
+    // Must have "check/show/open" + "console/logs" pattern
+    if (/\b(проверь|покажи|открой|check|show|open)\b/i.test(lowerText) && 
+        /\b(консоль|console|логи|logs)\b/i.test(lowerText)) {
       return { type: 'terminal', command: 'check-console' };
     }
     
@@ -768,7 +785,31 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
       return false; // Handle as action, not question
     }
     
-    // SECOND: Check for ACTION/EDIT/CREATE requests (these ALWAYS generate code)
+    // THIRD: Check for EXPLANATION questions BEFORE action patterns
+    // These are questions about what was done, NOT requests to do something
+    const explanationPatterns = [
+      // "What did you do/what was done" questions
+      /(что ты (сделал|сделала|делаешь|делала|наделал|изменил|изменила))/i,
+      /(что было сделано|что изменилось|какие изменения)/i,
+      /(что ты там|что ты тут)/i,
+      /(what did you (do|change|modify|edit))/i,
+      /(what have you (done|changed))/i,
+      /(what changes|what was changed)/i,
+      // "Explain what you're doing" questions
+      /(объясни|расскажи|покажи).*(что делаешь|что ты делаешь|что происходит)/i,
+      /(explain|tell me).*(what you('re| are) doing|what's happening)/i,
+      // "Why" questions about actions
+      /(почему ты|зачем ты).*(так делаешь|это делаешь|меняешь|редактируешь)/i,
+    ];
+    
+    for (const pattern of explanationPatterns) {
+      if (pattern.test(lowerText)) {
+        console.log('[isQuestionPrompt] Detected EXPLANATION question:', lowerText.slice(0, 50));
+        return true; // This is a question, use chat
+      }
+    }
+    
+    // FOURTH: Check for ACTION/EDIT/CREATE requests (these ALWAYS generate code)
     // This runs BEFORE question detection to handle "привет, создай приложение"
     const actionPatterns = [
       // English - explicit creation (anywhere in text)
@@ -795,7 +836,7 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
       }
     }
     
-    // THIRD: Check for pure questions (ONLY these should NOT generate code)
+    // FIFTH: Check for pure questions (ONLY these should NOT generate code)
     // Only matches if NO action patterns were found above
     const pureQuestionPatterns = [
       // Console/debug commands - DO NOT GENERATE CODE
@@ -805,9 +846,8 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
       // Purely informational questions
       /^(what is|why is|how does|explain|describe)\b/i,
       /^(что такое|что это|как работает|зачем нужен|почему так)/i,
-      // "Tell me about" (informational)
-      /(расскажи|рассказать|объясни|объяснить|подскажи|подсказать)\s+(что|как|почему|зачем)/i,
-      /(что ты сделал|что сделала|что было сделано)/i,
+      // "Tell me about" (informational) - but NOT "объясни что делать" which is action
+      /(расскажи|рассказать|подскажи|подсказать)\s+(что такое|как работает|почему|зачем)/i,
       // Pure greetings - extended patterns (anywhere, not just start)
       /^(привет|hello|hi|hey|здравствуй|здорово|хай|йо|салют|приветик)[\s!.,?]*$/i,
       /^(привет|hello|hi|hey).{0,20}$/i, // Short greetings with minor additions up to 20 chars
@@ -838,7 +878,7 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
       }
     }
     
-    // FOURTH: Default to GENERATION for everything else
+    // SIXTH: Default to GENERATION for everything else
     console.log('[isQuestionPrompt] Defaulting to GENERATION');
     return false;
   };
