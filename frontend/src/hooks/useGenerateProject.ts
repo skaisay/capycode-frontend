@@ -108,20 +108,18 @@ export function useGenerateProject(options: UseGenerateProjectOptions = {}) {
     let contextPrompt = prompt;
     if (isEdit && existingFiles.length > 0) {
       const filesSummary = existingFiles.map(f => `- ${f.path}`).join('\n');
-      const mainFiles = existingFiles
-        .filter(f => f.path.includes('App.tsx') || f.path.includes('index.tsx') || f.path.includes('screens/') || f.path.includes('components/'))
-        .slice(0, 8)
-        .map(f => `\n--- ${f.path} ---\n${f.content}`);
+      
+      // Send ALL files with full content so AI understands the complete project
+      // This is critical for accurate edits - AI needs to see exactly what's on screen
+      const allFilesContent = existingFiles
+        .map(f => `\n=== FILE: ${f.path} ===\n${f.content}\n=== END ${f.path} ===`)
+        .join('\n');
       
       // Check if user selected a specific element (element selector mode)
       const isElementSelection = prompt.includes('[Выбранный элемент:') || prompt.includes('[Выбранные элементы:');
       
       if (isElementSelection) {
-        // ELEMENT SELECTION MODE - be super strict, send ALL files with FULL content
-        const allFilesContent = existingFiles
-          .map(f => `\n=== FILE: ${f.path} ===\n${f.content}\n=== END ${f.path} ===`)
-          .join('\n');
-        
+        // ELEMENT SELECTION MODE - be super strict
         contextPrompt = `⚠️ ELEMENT SELECTION MODE - CRITICAL ⚠️
 
 The user selected a SPECIFIC UI element and wants to change ONLY that element!
@@ -142,17 +140,30 @@ ${prompt}
 
 If you change more than 10 lines total, YOU ARE WRONG!`;
       } else {
-        // Regular edit mode
-        contextPrompt = `EXISTING PROJECT CONTEXT:
-Files in project:
+        // Regular edit mode - send ALL files so AI knows the complete project context
+        // User might reference something visible on screen (like "change 24 to 99")
+        contextPrompt = `📱 EXISTING PROJECT - EDIT REQUEST
+
+You are modifying an existing mobile app. The user can see the app in a preview on their screen.
+They may reference things they see visually (like numbers, text, colors) without knowing the exact file.
+
+ALL PROJECT FILES (${existingFiles.length} files):
+${allFilesContent}
+
+FILES SUMMARY:
 ${filesSummary}
 
-Key file contents:
-${mainFiles.join('\n')}
+USER REQUEST:
+${prompt}
 
-USER REQUEST: ${prompt}
+IMPORTANT RULES:
+1. The user sees the app preview - they describe what they SEE, not file names
+2. Find the relevant code based on their description (e.g., "the number 24" means find where 24 appears)
+3. Make ONLY the requested changes - don't restructure or "improve" unrelated code
+4. Keep existing functionality intact
+5. Return only the files you actually modified
 
-Please modify the existing project based on the user's request. Keep existing functionality and only change what's needed.`;
+If the user says "change X to Y" - find where X appears in the code and change it to Y.`;
       }
     }
     

@@ -138,12 +138,10 @@ class ResilientSandboxService {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), this.HEALTH_CHECK_TIMEOUT);
       
+      // Don't send Cache-Control header - it's not allowed by CORS on the sandbox server
       const response = await fetch(`${provider.url}/health`, {
         method: 'GET',
         signal: controller.signal,
-        headers: {
-          'Cache-Control': 'no-cache',
-        },
       });
       
       clearTimeout(timeoutId);
