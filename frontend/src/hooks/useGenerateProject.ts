@@ -233,10 +233,17 @@ Please modify the existing project based on the user's request. Keep existing fu
       ? result.expoConfig.slug
       : currentProject?.slug || 'new-project';
     
+    // Get project ID from URL or use existing, or generate new one
+    const getProjectIdFromUrl = (): string => {
+      if (typeof window === 'undefined') return crypto.randomUUID();
+      const urlParams = new URLSearchParams(window.location.search);
+      return urlParams.get('project') || currentProject?.id || crypto.randomUUID();
+    };
+    
     // Only create new project if not editing
     if (!isEdit) {
       setProject({
-        id: crypto.randomUUID(),
+        id: getProjectIdFromUrl(), // Use ID from URL instead of generating new one
         name: projectName,
         slug: projectSlug,
         description: '',
