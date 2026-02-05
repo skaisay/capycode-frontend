@@ -1289,7 +1289,26 @@ ${err.message || 'An unexpected error occurred.'}
                   /* User Message */
                   <div className="flex justify-end">
                     <div className="max-w-[85%] bg-emerald-600 text-white rounded-2xl rounded-tr-md px-4 py-2.5">
-                      <p className="text-sm leading-relaxed">{message.content}</p>
+                      {/* Check if message contains element selection */}
+                      {message.content.includes('[Выбранный элемент:') || message.content.includes('[Выбранные элементы:') ? (
+                        <div>
+                          {/* Extract and display element selection badge */}
+                          {message.content.match(/\[Выбранн[ыйе]+ элемент[ыа]?: ([^\]]+)\]/) && (
+                            <div className="flex items-center gap-2 mb-2 px-2 py-1.5 bg-white/20 rounded-lg text-xs">
+                              <Eye className="w-3.5 h-3.5" />
+                              <span className="font-medium">
+                                {message.content.match(/\[Выбранн[ыйе]+ элемент[ыа]?: ([^\]]+)\]/)?.[1]}
+                              </span>
+                            </div>
+                          )}
+                          {/* Display the rest of the message */}
+                          <p className="text-sm leading-relaxed">
+                            {message.content.replace(/\[Выбранн[ыйе]+ элемент[ыа]?: [^\]]+\]\n*/, '').trim()}
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-sm leading-relaxed">{message.content}</p>
+                      )}
                     </div>
                   </div>
                 ) : (

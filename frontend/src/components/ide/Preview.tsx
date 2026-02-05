@@ -661,7 +661,7 @@ interface LivePreviewContentProps {
   project: Project | null;
   appContent: string | null;
   allFilesContent: string;
-  iframeRef?: React.RefObject<HTMLIFrameElement | null>;
+  iframeRef?: React.RefObject<HTMLIFrameElement>;
   isSelectingElement?: boolean;
 }
 

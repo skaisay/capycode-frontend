@@ -412,6 +412,12 @@ export function useGenerateProject(options: UseGenerateProjectOptions = {}) {
     const currentProject = useProjectStore.getState().project;
     const existingFiles = isEdit && currentProject?.files ? currentProject.files : [];
     
+    // CREATE BACKUP BEFORE MAKING ANY CHANGES IN EDIT MODE!
+    if (isEdit && currentProject && currentProject.files.length > 0) {
+      console.log('[useGenerateProject] Creating backup before edit...');
+      useProjectStore.getState().createBackup(`Before: ${prompt.substring(0, 50)}...`);
+    }
+    
     setProgress({
       stage: 'analyzing',
       message: isEdit ? 'Analyzing existing project...' : 'Analyzing your requirements...',

@@ -690,22 +690,52 @@ function buildUserPrompt(prompt: string): string {
     : '';
   
   if (isEditMode) {
+    // Check if user selected specific elements
+    const hasSelectedElement = prompt.includes('[Выбранный элемент:') || prompt.includes('[Выбранные элементы:');
+    const elementContext = hasSelectedElement 
+      ? `\n\n🎯 USER SELECTED SPECIFIC ELEMENT(S) IN THE PREVIEW!\nThe element info above shows EXACTLY which component to modify.\nYou MUST change ONLY that specific component/element, nothing else!`
+      : '';
+    
     return `${prompt}
 
-=== EDIT MODE ACTIVE ===
+=== ⚠️ EDIT MODE - MINIMAL CHANGES ONLY ===
 This is an EDIT request, NOT a new app creation.
 ${languageInstruction}
+${elementContext}
 
-YOUR TASK:
-1. Read ALL existing files in the context above
-2. Understand what the user wants to change
-3. Make ONLY the requested changes
-4. Return ALL files - modified ones with changes, unmodified ones with original content
-5. DO NOT remove any functionality that wasn't asked to be removed
-6. DO NOT change styling/colors unless specifically asked
-7. Preserve all imports, navigation, and component structure
+🔒 ABSOLUTE RULES FOR EDITING:
 
-CRITICAL: If user says "change X" - change ONLY X, nothing else!`;
+1. PRESERVE EVERYTHING:
+   - Keep ALL file structure exactly the same
+   - Keep ALL imports exactly as they were
+   - Keep ALL component names unchanged
+   - Keep ALL navigation unchanged
+   - Keep ALL styling that wasn't asked to change
+   - Keep ALL functionality that wasn't asked to change
+
+2. CHANGE ONLY WHAT WAS REQUESTED:
+   - "change color to blue" → Change ONLY the color value
+   - "make button bigger" → Change ONLY button size
+   - "translate to Russian" → Change ONLY text content
+   - "move element down" → Change ONLY position/margin
+
+3. RETURN ALL FILES:
+   - Include EVERY file from the original context
+   - Modified files have ONLY the requested changes
+   - Unmodified files have EXACT original content (copy-paste)
+   - Same file count in = same file count out
+
+4. NEVER DO:
+   ❌ Delete any files
+   ❌ Rename any files
+   ❌ Remove any imports
+   ❌ Restructure code that wasn't asked to change
+   ❌ Simplify or "improve" code that works
+   ❌ Remove features to "fix" something
+   ❌ Create App.tsx with all code in one file
+   ❌ Output raw code without proper file structure
+
+If the edit breaks the app, you made too many changes!`;
   }
   
   // Extract app complexity from prompt
