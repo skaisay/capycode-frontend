@@ -384,7 +384,7 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
           provider: key.provider,
           autoSelectKey: false, // We have a specific key
           userId: user?.id,
-          isEdit: project && project.files.length > 0,
+          isEdit: !!(project && project.files.length > 0),
         });
         
         // Success message
