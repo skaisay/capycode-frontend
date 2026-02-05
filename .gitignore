@@ -1,0 +1,41 @@
+.vercel
+.env*.local.env
+.env.production
+.env.development
+
+# Dependencies
+node_modules/
+
+# Build
+.next/
+out/
+build/
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage/
+
+# Misc
+*.pem
+# Secrets
+.env.vercel
+scripts/setup-stripe-webhook.ts
+scripts/setup-vercel-env.ps1
+frontend/.env.vercel
+frontend/scripts/setup-stripe-webhook.ts
+frontend/scripts/setup-vercel-env.ps1
+.env*.local
