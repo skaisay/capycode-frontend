@@ -415,9 +415,14 @@ export default function DashboardPage() {
               <button 
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className={`text-sm transition-colors capitalize ${activeTab === tab ? 'text-white' : 'text-white/50 hover:text-white'}`}
+                className={`text-sm transition-colors capitalize flex items-center gap-1.5 ${activeTab === tab ? 'text-white' : 'text-white/50 hover:text-white'}`}
               >
-                {tab === 'api' ? 'API Keys' : tab === 'test-keys' ? '🧪 Test Keys' : tab}
+                {tab === 'api' ? 'API Keys' : tab === 'test-keys' ? (
+                  <>
+                    🧪 Test Keys
+                    <span className="px-1.5 py-0.5 text-[10px] font-medium bg-purple-500/20 text-purple-400 rounded">BETA</span>
+                  </>
+                ) : tab}
               </button>
             ))}
           </nav>
@@ -987,20 +992,20 @@ export default function DashboardPage() {
                 {apiKeys.map((key) => (
                   <div
                     key={key.id}
-                    className="bg-[#111113]/80 backdrop-blur-xl border border-[#1f1f23]/50 rounded-xl p-5 flex items-center justify-between group"
+                    className="bg-[#111113]/80 backdrop-blur-xl border border-[#1f1f23]/50 rounded-xl p-5 flex items-center justify-between group overflow-hidden"
                   >
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-500/20 to-blue-500/20 flex items-center justify-center">
+                    <div className="flex items-center gap-4 min-w-0 flex-1">
+                      <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-500/20 to-blue-500/20 flex items-center justify-center flex-shrink-0">
                         <Key className="w-6 h-6 text-cyan-400" />
                       </div>
-                      <div>
-                        <h3 className="text-white font-medium">{key.name}</h3>
-                        <div className="flex items-center gap-3 text-sm text-[#6b6b70]">
-                          <span className="capitalize">{key.provider}</span>
-                          <span>•</span>
-                          <span className="font-mono">{key.key_preview}</span>
-                          <span>•</span>
-                          <span>Added {formatDate(key.created_at)}</span>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="text-white font-medium truncate">{key.name}</h3>
+                        <div className="flex items-center gap-2 text-sm text-[#6b6b70] flex-wrap">
+                          <span className="capitalize flex-shrink-0">{key.provider}</span>
+                          <span className="flex-shrink-0">•</span>
+                          <span className="font-mono truncate max-w-[120px] sm:max-w-[180px]">{key.key_preview}</span>
+                          <span className="hidden sm:inline flex-shrink-0">•</span>
+                          <span className="hidden sm:inline flex-shrink-0">Added {formatDate(key.created_at)}</span>
                         </div>
                       </div>
                     </div>
@@ -1026,6 +1031,9 @@ export default function DashboardPage() {
               <h2 className="text-xl font-semibold text-white flex items-center gap-2">
                 <FlaskConical className="w-6 h-6 text-purple-400" />
                 API Key Tester
+                <span className="px-2 py-0.5 text-xs font-medium bg-purple-500/20 text-purple-400 border border-purple-500/30 rounded-full">
+                  BETA
+                </span>
               </h2>
               <p className="text-[#6b6b70] text-sm mt-1">
                 Test any API key - auto-detection of provider and validation
