@@ -18,6 +18,85 @@ function detectProviderFromKey(apiKey: string): 'google' | 'openai' | 'anthropic
   return 'google';
 }
 
+// Check if the prompt is a generation request or just a chat message
+function isGenerationRequest(prompt: string, hasExistingProject: boolean): { isGeneration: boolean; reason: string } {
+  const promptLower = prompt.toLowerCase().trim();
+  const promptLength = prompt.length;
+  
+  // Greetings and simple messages that should NOT trigger generation
+  const greetingPatterns = [
+    /^(привет|здравствуй|здорово|хай|хей|йо|салют|приветик)[\s!.,?]*$/i,
+    /^(hi|hello|hey|yo|howdy|greetings)[\s!.,?]*$/i,
+    /^(как дела|как ты|что нового|что делаешь)[\s!.,?]*$/i,
+    /^(how are you|what's up|what's new|how's it going)[\s!.,?]*$/i,
+    /^(спасибо|благодарю|thanks|thank you|thx)[\s!.,?]*$/i,
+    /^(да|нет|ок|окей|хорошо|понял|ясно)[\s!.,?]*$/i,
+    /^(yes|no|ok|okay|sure|got it|understood)[\s!.,?]*$/i,
+    /^[a-zа-яё\s]{1,15}[!?.]*$/i, // Very short messages (1-15 chars)
+  ];
+  
+  // Check if it matches any greeting pattern
+  for (const pattern of greetingPatterns) {
+    if (pattern.test(promptLower)) {
+      return { isGeneration: false, reason: 'Greeting or simple message' };
+    }
+  }
+  
+  // Very short prompts without action words - probably not a generation request
+  if (promptLength < 20 && !hasExistingProject) {
+    const actionWords = ['создай', 'сделай', 'добавь', 'измени', 'create', 'make', 'build', 'add', 'change', 'edit', 'fix', 'app', 'приложение'];
+    const hasActionWord = actionWords.some(word => promptLower.includes(word));
+    if (!hasActionWord) {
+      return { isGeneration: false, reason: 'Too short without action words' };
+    }
+  }
+  
+  // Questions about how to do something (not asking to DO it)
+  const questionPatterns = [
+    /^(как|что такое|почему|зачем|можно ли)\s/i,
+    /^(how to|what is|why|can i|could you explain)\s/i,
+    /\?$/,
+  ];
+  
+  // If it's a question AND doesn't have generation intent, it's chat
+  const isQuestion = questionPatterns.some(p => p.test(prompt));
+  const generationIntentWords = ['создай', 'сделай', 'добавь', 'напиши', 'сгенерируй', 'create', 'make', 'build', 'add', 'generate', 'implement'];
+  const hasGenerationIntent = generationIntentWords.some(word => promptLower.includes(word));
+  
+  if (isQuestion && !hasGenerationIntent && !hasExistingProject) {
+    return { isGeneration: false, reason: 'Question without generation intent' };
+  }
+  
+  // Keywords that definitely indicate generation request
+  const generationKeywords = [
+    'создай', 'сделай', 'разработай', 'напиши', 'сгенерируй', 'построй',
+    'приложение', 'апп', 'экран', 'компонент', 'кнопк', 'форм',
+    'create', 'build', 'make', 'develop', 'generate', 'write',
+    'app', 'application', 'screen', 'component', 'button', 'form',
+    'добавь', 'измени', 'удали', 'исправь', 'обнови',
+    'add', 'change', 'remove', 'fix', 'update', 'modify'
+  ];
+  
+  const hasGenerationKeyword = generationKeywords.some(kw => promptLower.includes(kw));
+  
+  if (hasGenerationKeyword) {
+    return { isGeneration: true, reason: 'Contains generation keywords' };
+  }
+  
+  // If there's an existing project, more likely to be an edit request
+  if (hasExistingProject && promptLength > 10) {
+    return { isGeneration: true, reason: 'Editing existing project' };
+  }
+  
+  // Long prompts (>50 chars) are probably generation requests
+  if (promptLength > 50) {
+    return { isGeneration: true, reason: 'Long detailed prompt' };
+  }
+  
+  // Default: if nothing matched, it's probably just chat
+  return { isGeneration: false, reason: 'No clear generation intent' };
+}
+
 // Auto-select the optimal model based on prompt complexity
 function selectOptimalModel(prompt: string, requestedModel?: AIModel): AIModel {
   // If user explicitly requested a model, use it
@@ -165,7 +244,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { prompt, model: requestedModel, apiKey: userApiKey, provider, autoSelectKey, userId } = body;
+    const { prompt, model: requestedModel, apiKey: userApiKey, provider, autoSelectKey, userId, hasExistingProject, forceGeneration } = body;
 
     if (!prompt) {
       return NextResponse.json(
@@ -173,6 +252,23 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Check if this is actually a generation request or just chat
+    const generationCheck = isGenerationRequest(prompt, !!hasExistingProject);
+    
+    if (!generationCheck.isGeneration && !forceGeneration) {
+      console.log(`[Generate] Not a generation request: ${generationCheck.reason}. Prompt: "${prompt.substring(0, 50)}..."`);
+      
+      // Return a special response indicating this should go to chat instead
+      return NextResponse.json({
+        isChat: true,
+        reason: generationCheck.reason,
+        message: 'This appears to be a chat message, not a generation request. Use /api/chat instead.',
+        suggestedAction: 'redirect_to_chat'
+      }, { status: 200 });
+    }
+    
+    console.log(`[Generate] Generation request confirmed: ${generationCheck.reason}`);
 
     // Auto-select model based on prompt complexity
     const model = selectOptimalModel(prompt, requestedModel as AIModel | undefined);

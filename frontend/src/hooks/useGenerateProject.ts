@@ -164,6 +164,7 @@ Please modify the existing project based on the user's request. Keep existing fu
       provider: provider, // Provider of the API key (google, openai, anthropic)
       autoSelectKey: autoSelectKey || false,
       userId: userId,
+      hasExistingProject: existingFiles.length > 0 || isEdit, // Tell API if we're editing
     };
     
     console.log('[useGenerateProject] Calling /api/generate with:', {
@@ -195,13 +196,28 @@ Please modify the existing project based on the user's request. Keep existing fu
       throw new Error(error.error || 'Failed to generate project');
     }
     
+    const result = await response.json();
+    
+    // Check if this was determined to be a chat message instead of generation
+    if (result.isChat) {
+      console.log('[useGenerateProject] Prompt is chat, not generation:', result.reason);
+      // Return a special result that indicates chat should be used
+      return {
+        isChat: true,
+        reason: result.reason,
+        message: result.message,
+        files: [],
+        dependencies: {},
+        devDependencies: {},
+        expoConfig: {}
+      };
+    }
+    
     setProgress({
       stage: 'generating',
       message: 'AI is creating your app...',
       progress: 50,
     });
-    
-    const result = await response.json();
     
     console.log('[useGenerateProject] API Result:', {
       filesCount: result.files?.length,

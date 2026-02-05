@@ -22,7 +22,11 @@ import {
   RefreshCw,
   Check,
   Code2,
-  Crown
+  Crown,
+  FlaskConical,
+  Play,
+  AlertCircle,
+  CheckCircle2
 } from 'lucide-react';
 import { getSupabaseClient } from '@/lib/supabase';
 import { 
@@ -77,7 +81,7 @@ export default function DashboardPage() {
   const searchParams = useSearchParams();
   const [user, setUser] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'projects' | 'api' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'projects' | 'api' | 'test-keys' | 'settings'>('overview');
   
   // Welcome animation
   const [showWelcome, setShowWelcome] = useState(true);
@@ -106,6 +110,15 @@ export default function DashboardPage() {
   const [showApiForm, setShowApiForm] = useState(false);
   const [newApiKey, setNewApiKey] = useState<{ name: string; key: string; provider: 'openai' | 'anthropic' | 'google' | 'custom' }>({ name: '', key: '', provider: 'openai' });
   const [savingApiKey, setSavingApiKey] = useState(false);
+  
+  // API Key Testing
+  const [testKeyInput, setTestKeyInput] = useState('');
+  const [testingKey, setTestingKey] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    detection: { provider: string; confidence: string; possibleProviders: string[] };
+    testedProvider: string;
+    result: { success: boolean; message: string; latency?: number; model?: string };
+  } | null>(null);
   
   // Auto-detect provider from API key
   const detectProviderFromKey = (key: string): 'openai' | 'anthropic' | 'google' | 'custom' => {
@@ -290,6 +303,42 @@ export default function DashboardPage() {
     }
   };
 
+  // Test API Key function
+  const handleTestApiKey = async () => {
+    if (!testKeyInput.trim()) {
+      toast.error('Please enter an API key to test');
+      return;
+    }
+    
+    setTestingKey(true);
+    setTestResult(null);
+    
+    try {
+      const response = await fetch('/api/keys/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: testKeyInput }),
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        setTestResult(data);
+        if (data.result.success) {
+          toast.success('API Key is valid!');
+        } else {
+          toast.error('API Key test failed');
+        }
+      } else {
+        toast.error(data.error || 'Failed to test key');
+      }
+    } catch (error) {
+      toast.error('Network error while testing key');
+    } finally {
+      setTestingKey(false);
+    }
+  };
+
   const handleSaveApiKey = async () => {
     if (!newApiKey.name.trim() || !newApiKey.key.trim()) {
       toast.error('Please fill in all fields');
@@ -362,13 +411,13 @@ export default function DashboardPage() {
           </Link>
 
           <nav className="hidden md:flex items-center gap-6">
-            {(['overview', 'projects', 'api', 'settings'] as const).map((tab) => (
+            {(['overview', 'projects', 'api', 'test-keys', 'settings'] as const).map((tab) => (
               <button 
                 key={tab}
                 onClick={() => setActiveTab(tab)}
                 className={`text-sm transition-colors capitalize ${activeTab === tab ? 'text-white' : 'text-white/50 hover:text-white'}`}
               >
-                {tab === 'api' ? 'API Keys' : tab}
+                {tab === 'api' ? 'API Keys' : tab === 'test-keys' ? '🧪 Test Keys' : tab}
               </button>
             ))}
           </nav>
@@ -701,6 +750,13 @@ export default function DashboardPage() {
                       <span className="text-[#9a9aa0]">Manage API Keys</span>
                     </button>
                     <button
+                      onClick={() => setActiveTab('test-keys')}
+                      className="w-full flex items-center gap-3 p-3 hover:bg-purple-500/10 border border-purple-500/10 rounded-xl transition-colors"
+                    >
+                      <FlaskConical className="w-5 h-5 text-purple-400" />
+                      <span className="text-purple-400">Test API Keys</span>
+                    </button>
+                    <button
                       onClick={() => setActiveTab('settings')}
                       className="w-full flex items-center gap-3 p-3 hover:bg-[#1f1f23]/50 rounded-xl transition-colors"
                     >
@@ -958,6 +1014,176 @@ export default function DashboardPage() {
                 ))}
               </div>
             )}
+          </motion.div>
+        )}
+
+        {activeTab === 'test-keys' && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <div className="mb-6">
+              <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+                <FlaskConical className="w-6 h-6 text-purple-400" />
+                API Key Tester
+              </h2>
+              <p className="text-[#6b6b70] text-sm mt-1">
+                Test any API key - auto-detection of provider and validation
+              </p>
+            </div>
+
+            {/* Test Input */}
+            <div className="bg-[#111113]/80 backdrop-blur-xl border border-[#1f1f23]/50 rounded-2xl p-6 mb-6">
+              <h3 className="text-lg font-medium text-white mb-4">Enter API Key to Test</h3>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm text-[#6b6b70] mb-2 block">API Key</label>
+                  <div className="relative">
+                    <input
+                      type="password"
+                      value={testKeyInput}
+                      onChange={(e) => {
+                        setTestKeyInput(e.target.value);
+                        setTestResult(null);
+                      }}
+                      placeholder="sk-... or AIza... or gsk_... etc"
+                      className="w-full px-4 py-3 bg-[#0a0a0b] border border-[#1f1f23] rounded-xl text-white placeholder-[#4a4a4e] focus:border-purple-500/50 focus:outline-none font-mono"
+                    />
+                    {testKeyInput.length > 3 && (
+                      <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                        <span className="text-xs px-2 py-1 rounded-full bg-purple-500/10 text-purple-400">
+                          {testKeyInput.startsWith('AIza') ? 'Google' :
+                           testKeyInput.startsWith('sk-ant-') ? 'Anthropic' :
+                           testKeyInput.startsWith('sk-or-') ? 'OpenRouter' :
+                           testKeyInput.startsWith('gsk_') ? 'Groq' :
+                           testKeyInput.startsWith('fw_') ? 'Fireworks' :
+                           testKeyInput.startsWith('hf_') ? 'HuggingFace' :
+                           testKeyInput.startsWith('r8_') ? 'Replicate' :
+                           testKeyInput.startsWith('sk-') ? 'OpenAI' : 'Unknown'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleTestApiKey}
+                  disabled={testingKey || !testKeyInput.trim()}
+                  className="w-full py-3 bg-purple-600 hover:bg-purple-500 disabled:bg-[#1f1f23] disabled:text-[#6b6b70] text-white font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
+                >
+                  {testingKey ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      Testing...
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-5 h-5" />
+                      Test API Key
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Test Result */}
+            {testResult && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className={`bg-[#111113]/80 backdrop-blur-xl border rounded-2xl p-6 ${
+                  testResult.result.success ? 'border-green-500/30' : 'border-red-500/30'
+                }`}
+              >
+                <div className="flex items-start gap-4">
+                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
+                    testResult.result.success ? 'bg-green-500/10' : 'bg-red-500/10'
+                  }`}>
+                    {testResult.result.success ? (
+                      <CheckCircle2 className="w-6 h-6 text-green-400" />
+                    ) : (
+                      <AlertCircle className="w-6 h-6 text-red-400" />
+                    )}
+                  </div>
+                  <div className="flex-1">
+                    <h3 className={`text-lg font-medium ${
+                      testResult.result.success ? 'text-green-400' : 'text-red-400'
+                    }`}>
+                      {testResult.result.success ? 'Key is Valid!' : 'Key Test Failed'}
+                    </h3>
+                    <p className="text-white/70 mt-1">{testResult.result.message}</p>
+                    
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                      <div className="bg-[#0a0a0b] rounded-lg p-3">
+                        <p className="text-xs text-[#6b6b70]">Detected Provider</p>
+                        <p className="text-white font-medium capitalize">{testResult.detection.provider}</p>
+                      </div>
+                      <div className="bg-[#0a0a0b] rounded-lg p-3">
+                        <p className="text-xs text-[#6b6b70]">Confidence</p>
+                        <p className={`font-medium capitalize ${
+                          testResult.detection.confidence === 'high' ? 'text-green-400' :
+                          testResult.detection.confidence === 'medium' ? 'text-yellow-400' : 'text-red-400'
+                        }`}>{testResult.detection.confidence}</p>
+                      </div>
+                      <div className="bg-[#0a0a0b] rounded-lg p-3">
+                        <p className="text-xs text-[#6b6b70]">Latency</p>
+                        <p className="text-white font-medium">
+                          {testResult.result.latency ? `${testResult.result.latency}ms` : 'N/A'}
+                        </p>
+                      </div>
+                      <div className="bg-[#0a0a0b] rounded-lg p-3">
+                        <p className="text-xs text-[#6b6b70]">Model</p>
+                        <p className="text-white font-medium capitalize">
+                          {testResult.result.model || 'N/A'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {testResult.result.success && (
+                      <button
+                        onClick={() => {
+                          setNewApiKey({
+                            name: `${testResult.detection.provider} Key`,
+                            key: testKeyInput,
+                            provider: testResult.detection.provider as any
+                          });
+                          setShowApiForm(true);
+                          setActiveTab('api');
+                          toast.success('Key copied to add form!');
+                        }}
+                        className="mt-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors flex items-center gap-2"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Save This Key
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {/* Supported Providers */}
+            <div className="bg-[#111113]/80 backdrop-blur-xl border border-[#1f1f23]/50 rounded-2xl p-6 mt-6">
+              <h3 className="text-lg font-medium text-white mb-4">Supported Providers</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {[
+                  { name: 'Google AI', prefix: 'AIza...', color: 'blue' },
+                  { name: 'OpenAI', prefix: 'sk-...', color: 'green' },
+                  { name: 'Anthropic', prefix: 'sk-ant-...', color: 'orange' },
+                  { name: 'OpenRouter', prefix: 'sk-or-...', color: 'purple' },
+                  { name: 'Groq', prefix: 'gsk_...', color: 'cyan' },
+                  { name: 'Fireworks', prefix: 'fw_...', color: 'red' },
+                  { name: 'HuggingFace', prefix: 'hf_...', color: 'yellow' },
+                  { name: 'Together AI', prefix: '64-char hex', color: 'pink' },
+                ].map((provider) => (
+                  <div key={provider.name} className="bg-[#0a0a0b] rounded-xl p-3">
+                    <p className="text-white font-medium text-sm">{provider.name}</p>
+                    <p className="text-[#6b6b70] text-xs font-mono mt-1">{provider.prefix}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
           </motion.div>
         )}
 
