@@ -83,19 +83,12 @@ export function useDevToolsData(): DevToolsData {
 
       // For new projects, show empty history
       // For existing projects, only show history from current session
-      // Since generation_logs don't have project_id, we filter by last hour
-      if (!projectId || projectId === 'new') {
-        // New or no project - empty history
-        setHistory([]);
-      } else {
-        // For existing project - only show entries from last hour as "current session"
-        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-        const filteredHistory = historyData.filter(entry => {
-          const entryDate = new Date(entry.timestamp);
-          return entryDate >= oneHourAgo;
-        });
-        setHistory(filteredHistory);
-      }
+      // Since generation_logs don't have project_id, we just show empty for consistency
+      // This prevents "demo data" confusion from old projects
+      
+      // Always show empty history in DevTools - history is for current session only
+      // Users should see generation logs only after they generate something
+      setHistory([]);
     } catch (error) {
       console.error('Error fetching DevTools data:', error);
       addLog('error', 'Failed to load user data', String(error));

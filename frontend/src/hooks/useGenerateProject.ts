@@ -364,6 +364,13 @@ Please modify the existing project based on the user's request. Keep existing fu
         } else {
           setProject(updatedProject, true); // skipBackup=true for new projects
         }
+        
+        // Update URL to include project ID for proper restoration on refresh
+        if (typeof window !== 'undefined' && !isEditMode) {
+          const url = new URL(window.location.href);
+          url.searchParams.set('project', currentProject.id);
+          window.history.replaceState({}, '', url.toString());
+        }
       }
       
       onSuccess?.(result);
