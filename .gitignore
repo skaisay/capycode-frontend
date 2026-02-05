@@ -39,3 +39,6 @@ frontend/.env.vercel
 frontend/scripts/setup-stripe-webhook.ts
 frontend/scripts/setup-vercel-env.ps1
 .env*.local
+
+# Local Netlify folder
+.netlify
