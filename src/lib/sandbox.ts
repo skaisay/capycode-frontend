@@ -7,7 +7,11 @@
  * - Файловой системой
  * - Пробросом портов
  * - WebSocket стримингом
+ * 
+ * Использует Resilient Service для автоматического failover между провайдерами
  */
+
+import { getResilientSandbox } from './services/resilient-sandbox';
 
 // Types
 export interface SandboxSession {
@@ -52,26 +56,54 @@ class SandboxService {
   private sessions: Map<string, SandboxSession> = new Map();
   private terminals: Map<string, WebSocket> = new Map();
   private outputListeners: Map<string, ((output: TerminalOutput) => void)[]> = new Map();
+  private resilientSandbox = getResilientSandbox();
 
   constructor() {
     // API endpoints - will be configured based on environment
-    // Если NEXT_PUBLIC_SANDBOX_API_URL указан и не содержит /api/sandbox - это внешний API
+    // Используем resilient сервис для автоматического failover
     const envUrl = process.env.NEXT_PUBLIC_SANDBOX_API_URL;
     this.isExternalApi = !!envUrl && !envUrl.includes('/api/sandbox');
-    this.apiUrl = envUrl || '/api/sandbox';
+    
+    // Если внешний API - используем resilient service
+    if (this.isExternalApi) {
+      this.apiUrl = this.resilientSandbox.getActiveUrl();
+    } else {
+      this.apiUrl = envUrl || '/api/sandbox';
+    }
+    
     this.wsUrl = process.env.NEXT_PUBLIC_SANDBOX_WS_URL || '';
     
     console.log('[Sandbox] API URL:', this.apiUrl, 'External:', this.isExternalApi);
   }
 
+  // Helper to get current API URL (may change if provider switches)
+  private getCurrentApiUrl(): string {
+    if (this.isExternalApi) {
+      return this.resilientSandbox.getActiveUrl();
+    }
+    return this.apiUrl;
+  }
+
   // Helper to build API URL
   private buildUrl(action: string): string {
+    const baseUrl = this.getCurrentApiUrl();
     if (this.isExternalApi) {
       // External API: /sandbox/create, /sandbox/upload, etc.
-      return `${this.apiUrl}/sandbox/${action}`;
+      return `${baseUrl}/sandbox/${action}`;
     } else {
       // Vercel API: /api/sandbox?action=create
-      return `${this.apiUrl}?action=${action}`;
+      return `${baseUrl}?action=${action}`;
+    }
+  }
+
+  // Helper for resilient fetch with automatic failover
+  private async resilientFetch(action: string, options: RequestInit): Promise<Response> {
+    if (this.isExternalApi) {
+      // Use resilient service with automatic failover
+      return this.resilientSandbox.fetch(`/sandbox/${action}`, options);
+    } else {
+      // Local API - normal fetch
+      return fetch(this.buildUrl(action), options);
     }
   }
 
@@ -80,7 +112,7 @@ class SandboxService {
    */
   async createSession(projectId: string, template: 'expo' | 'node' | 'react' = 'expo'): Promise<SandboxSession> {
     try {
-      const response = await fetch(this.buildUrl('create'), {
+      const response = await this.resilientFetch('create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectId, template }),
@@ -104,7 +136,7 @@ class SandboxService {
    * Upload project files to sandbox
    */
   async uploadFiles(sessionId: string, files: SandboxFile[]): Promise<void> {
-    const response = await fetch(this.buildUrl('upload'), {
+    const response = await this.resilientFetch('upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sandboxId: sessionId, files }),
@@ -120,7 +152,7 @@ class SandboxService {
    * Execute a command in the sandbox terminal
    */
   async executeCommand(sessionId: string, command: string): Promise<{ exitCode: number; output: string }> {
-    const response = await fetch(this.buildUrl('exec'), {
+    const response = await this.resilientFetch('exec', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sandboxId: sessionId, command }),
@@ -162,7 +194,7 @@ class SandboxService {
    */
   async startExpoServer(sessionId: string, onStatusUpdate?: (status: ExpoStatus) => void): Promise<ExpoDevServer> {
     // Start Expo (this returns immediately, process runs in background)
-    const response = await fetch(this.buildUrl('expo-start'), {
+    const response = await this.resilientFetch('expo-start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sandboxId: sessionId }),
@@ -183,7 +215,7 @@ class SandboxService {
       await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
       
       try {
-        const statusResponse = await fetch(this.buildUrl('expo-status'), {
+        const statusResponse = await this.resilientFetch('expo-status', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sandboxId: sessionId }),
@@ -233,7 +265,7 @@ class SandboxService {
    * Get Expo status (for manual polling)
    */
   async getExpoStatus(sessionId: string): Promise<ExpoStatus> {
-    const response = await fetch(this.buildUrl('expo-status'), {
+    const response = await this.resilientFetch('expo-status', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sandboxId: sessionId }),
@@ -250,7 +282,7 @@ class SandboxService {
    * Stop Expo Dev Server
    */
   async stopExpoServer(sessionId: string): Promise<void> {
-    await fetch(this.buildUrl('expo-stop'), {
+    await this.resilientFetch('expo-stop', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sandboxId: sessionId }),
@@ -261,7 +293,8 @@ class SandboxService {
    * Get public URL for a port
    */
   async getPortUrl(sessionId: string, port: number): Promise<string> {
-    const response = await fetch(`${this.apiUrl}/sessions/${sessionId}/ports/${port}`);
+    const baseUrl = this.getCurrentApiUrl();
+    const response = await fetch(`${baseUrl}/sessions/${sessionId}/ports/${port}`);
     
     if (!response.ok) {
       throw new Error('Failed to get port URL');
@@ -283,7 +316,8 @@ class SandboxService {
     }
 
     // Delete session
-    await fetch(`${this.apiUrl}/sessions/${sessionId}`, {
+    const baseUrl = this.getCurrentApiUrl();
+    await fetch(`${baseUrl}/sessions/${sessionId}`, {
       method: 'DELETE',
     });
 
@@ -298,7 +332,8 @@ class SandboxService {
     if (cached) return cached;
 
     try {
-      const response = await fetch(`${this.apiUrl}/sessions/${sessionId}`);
+      const baseUrl = this.getCurrentApiUrl();
+      const response = await fetch(`${baseUrl}/sessions/${sessionId}`);
       if (!response.ok) return null;
       
       const session = await response.json();
