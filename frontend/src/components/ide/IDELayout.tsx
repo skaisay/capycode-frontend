@@ -87,6 +87,8 @@ export function IDELayout() {
     if (pendingPrompt) {
       // New project generation - CLEAR old project data first!
       resetProject();
+      // Also clear current_project_id to prevent old project restoration
+      localStorage.removeItem(getStorageKey('current_project_id'));
       
       setInitialPrompt(pendingPrompt);
       setInitialModel(pendingModel);
@@ -142,17 +144,25 @@ export function IDELayout() {
   // 2. No generation is in progress
   // 3. Generation hasn't been started in this session
   // 4. No active generation flag in localStorage
+  // 5. URL project ID matches stored project ID
   useEffect(() => {
     const isGeneratingInStorage = typeof window !== 'undefined' && localStorage.getItem(getStorageKey('generating')) === 'true';
     
-    if (shouldRestoreProject && !project && !isGenerating && !generationStarted && !initialPrompt && !isGeneratingInStorage) {
-      const currentProjectId = localStorage.getItem(getStorageKey('current_project_id'));
-      if (currentProjectId) {
-        console.log('[IDELayout] Restoring project:', currentProjectId);
-        loadProject(currentProjectId);
-      }
+    // Get project ID from URL
+    const urlProjectId = searchParams.get('project');
+    const storedProjectId = localStorage.getItem(getStorageKey('current_project_id'));
+    
+    // Only restore if URL project matches stored project AND it's not a new project
+    const shouldRestore = urlProjectId && urlProjectId !== 'new' && urlProjectId === storedProjectId;
+    
+    if (shouldRestoreProject && !project && !isGenerating && !generationStarted && !initialPrompt && !isGeneratingInStorage && shouldRestore) {
+      console.log('[IDELayout] Restoring project:', storedProjectId);
+      loadProject(storedProjectId);
+    } else if (urlProjectId === 'new' || (urlProjectId && urlProjectId !== storedProjectId)) {
+      // New project or different project - clear old data
+      console.log('[IDELayout] New/different project, not restoring old data');
     }
-  }, [shouldRestoreProject, project, loadProject, isGenerating, generationStarted, initialPrompt]);
+  }, [shouldRestoreProject, project, loadProject, isGenerating, generationStarted, initialPrompt, searchParams]);
   
   // Element selector store for AI chat integration
   const { selectedElements, getSelectionDescription, clearSelectedElements } = useElementSelectorStore();
