@@ -54,3 +54,6 @@ coverage/
 # EAS
 .expo/
 .eas/
+
+# Local Netlify folder
+.netlify

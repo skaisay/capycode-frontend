@@ -558,10 +558,20 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
       // "Tell me about" (informational)
       /(расскажи|рассказать|объясни|объяснить|подскажи|подсказать)\s+(что|как|почему|зачем)/i,
       /(что ты сделал|что сделала|что было сделано)/i,
-      // Pure greetings (only if nothing else follows)
-      /^(привет|hello|hi|hey|здравствуй)[\s!.]*$/i,
+      // Pure greetings - extended patterns
+      /^(привет|hello|hi|hey|здравствуй|здорово|хай|йо|салют|приветик)[\s!.,?]*$/i,
+      /^(привет|hello|hi|hey).{0,10}$/i, // Short greetings with minor additions
+      // Conversational questions
+      /^(как дела|как ты|что нового|что делаешь)[\s!?,]*$/i,
+      /^(how are you|what's up|how's it going)[\s!?,]*$/i,
+      // Affirmative/short responses
+      /^(да|нет|ок|окей|хорошо|понял|ясно|круто|класс|отлично|супер)[\s!.,?]*$/i,
+      /^(yes|no|ok|okay|sure|got it|understood|cool|great|nice|awesome)[\s!.,?]*$/i,
       // Pure thanks
-      /^(спасибо|thanks|thank you)[\s!.]*$/i,
+      /^(спасибо|благодарю|thanks|thank you|thx)[\s!.,?]*$/i,
+      // Questions about AI
+      /^(кто ты|что ты|ты кто|who are you|what are you)[\s!?,]*$/i,
+      /^(что ты умеешь|что можешь|what can you do)[\s!?,]*$/i,
     ];
     
     for (const pattern of pureQuestionPatterns) {
@@ -606,6 +616,15 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
         }
       }
       
+      // Build conversation history from recent messages
+      const recentHistory = chatHistory
+        .filter(msg => msg.status !== 'thinking')
+        .slice(-6)
+        .map(msg => ({
+          role: msg.role,
+          content: msg.content.slice(0, 500)
+        }));
+      
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -615,6 +634,7 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
           apiKey: selectedKey?.encryptedKey,
           provider: selectedKey?.provider,
           userId: user?.id,
+          history: recentHistory,
         }),
       });
       
@@ -888,31 +908,46 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
       const appName = result?.expoConfig?.name || project?.name || 'App';
       const filesCount = result?.files?.length || 0;
       const newFiles = result?.files?.filter((f: any) => !project?.files.find(pf => pf.path === f.path)) || [];
-      const modifiedFiles = result?.files?.filter((f: any) => project?.files.find(pf => pf.path === f.path)) || [];
       
-      // Create action-based message
+      // Find actually MODIFIED files (content changed, not just exists)
+      const modifiedFiles = result?.files?.filter((f: any) => {
+        const existingFile = project?.files.find(pf => pf.path === f.path);
+        if (!existingFile) return false;
+        // Compare content - only count as modified if content actually changed
+        return existingFile.content !== f.content;
+      }) || [];
+      
+      // Create action-based message with REAL changes
       let actionDescription = '';
       if (hasExistingProject) {
-        if (newFiles.length > 0 && modifiedFiles.length > 0) {
-          actionDescription = `Added ${newFiles.length} new file${newFiles.length > 1 ? 's' : ''} and updated ${modifiedFiles.length} existing file${modifiedFiles.length > 1 ? 's' : ''}`;
+        const actuallyChanged = newFiles.length + modifiedFiles.length;
+        
+        if (actuallyChanged === 0) {
+          actionDescription = 'Проект уже содержит запрошенные изменения';
+        } else if (newFiles.length > 0 && modifiedFiles.length > 0) {
+          const newFileNames = newFiles.slice(0, 2).map((f: any) => f.path.split('/').pop()).join(', ');
+          const modFileNames = modifiedFiles.slice(0, 2).map((f: any) => f.path.split('/').pop()).join(', ');
+          actionDescription = `**Добавлено ${newFiles.length}:** ${newFileNames}${newFiles.length > 2 ? '...' : ''}\n**Изменено ${modifiedFiles.length}:** ${modFileNames}${modifiedFiles.length > 2 ? '...' : ''}`;
         } else if (newFiles.length > 0) {
-          actionDescription = `Added ${newFiles.length} new file${newFiles.length > 1 ? 's' : ''}: ${newFiles.slice(0, 3).map((f: any) => f.path.split('/').pop()).join(', ')}`;
+          const fileNames = newFiles.slice(0, 3).map((f: any) => f.path.split('/').pop()).join(', ');
+          actionDescription = `**Добавлено ${newFiles.length} файл${newFiles.length > 1 ? 'ов' : ''}:** ${fileNames}`;
         } else if (modifiedFiles.length > 0) {
-          actionDescription = `Updated ${modifiedFiles.length} file${modifiedFiles.length > 1 ? 's' : ''}: ${modifiedFiles.slice(0, 3).map((f: any) => f.path.split('/').pop()).join(', ')}`;
+          const fileNames = modifiedFiles.slice(0, 3).map((f: any) => f.path.split('/').pop()).join(', ');
+          actionDescription = `**Изменено ${modifiedFiles.length} файл${modifiedFiles.length > 1 ? 'ов' : ''}:** ${fileNames}`;
         } else {
-          actionDescription = `Processed ${filesCount} files`;
+          actionDescription = `Обработано ${filesCount} файлов`;
         }
       } else {
-        actionDescription = `Created **${appName}** with ${filesCount} files`;
+        actionDescription = `Создано приложение **${appName}** (${filesCount} файлов)`;
       }
         
       const assistantMessage: ChatMessage = {
         id: thinkingMessageId,
         role: 'assistant',
-        content: `${actionDescription}\n\nYour changes are ready. Check the preview on the right to see the result.`,
+        content: `${actionDescription}\n\n✅ Изменения применены. Проверьте превью справа.`,
         timestamp: Date.now(),
         status: 'complete',
-        files: result?.files?.map((f: any) => f.path) || [],
+        files: modifiedFiles.length > 0 ? modifiedFiles.map((f: any) => f.path) : result?.files?.map((f: any) => f.path) || [],
       };
       // Replace thinking message with success message
       setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? assistantMessage : msg));

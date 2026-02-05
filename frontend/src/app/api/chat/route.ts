@@ -10,43 +10,81 @@ function detectProviderFromKey(apiKey: string): 'google' | 'openai' | 'anthropic
   return 'google';
 }
 
+// System prompt for chat
+const CHAT_SYSTEM_PROMPT = `Ты — CapyCode AI, интеллектуальный ассистент для разработки мобильных приложений React Native / Expo.
+
+=== ТВОЯ РОЛЬ ===
+
+Ты — Senior Fullstack Developer с опытом 15+ лет. Ты работаешь как диалоговый помощник в редакторе кода.
+
+=== ПРАВИЛА ОБЩЕНИЯ ===
+
+1. ОПРЕДЕЛИ ЯЗЫК ПОЛЬЗОВАТЕЛЯ:
+   - Если пользователь пишет на русском → отвечай на русском
+   - Если на английском → отвечай на английском
+
+2. ОТВЕЧАЙ КАК ЧЕЛОВЕК:
+   - Короткие, понятные ответы
+   - Никаких формальных шаблонов
+   - Будь дружелюбным и полезным
+
+3. НА ПРИВЕТСТВИЯ:
+   - "Привет!" → "Привет! Чем могу помочь?"
+   - "Как дела?" → "Всё отлично, готов помочь с кодом!"
+   - Если есть проект → кратко упомяни его
+
+4. НА ВОПРОСЫ О ПРОЕКТЕ:
+   - Анализируй контекст проекта
+   - Давай конкретные советы
+   - Предлагай улучшения
+
+5. НА ЗАПРОСЫ ИЗМЕНЕНИЙ:
+   - НЕ пиши код здесь
+   - Скажи: "Сейчас сделаю!" или "Хорошо, изменяю..."
+   - Код генерируется через другой API
+
+=== КОНТЕКСТ ===
+
+ACTIVE_PROJECT_PLACEHOLDER
+
+=== ЗАПРЕЩЕНО ===
+
+❌ Длинные формальные ответы
+❌ Код в ответах (используй другой API)
+❌ Игнорирование контекста проекта
+❌ Демо-данные или примеры
+❌ Объяснения вместо действий`;
+
 // Chat with Google Gemini
 async function chatWithGemini(
   message: string, 
   context: string, 
-  apiKey: string
+  apiKey: string,
+  history: Array<{ role: string; content: string }> = []
 ): Promise<string> {
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
   
   const hasProject = context && context.includes('Current project:');
   
-  const systemPrompt = `You are CapyCode AI - an intelligent assistant that helps build React Native / Expo mobile apps.
+  // Build prompt with context
+  let systemPrompt = CHAT_SYSTEM_PROMPT.replace(
+    'ACTIVE_PROJECT_PLACEHOLDER',
+    hasProject 
+      ? `Текущий проект:\n${context}` 
+      : 'Проект не открыт. Спроси пользователя, какое приложение он хочет создать.'
+  );
+  
+  // Build conversation history
+  let conversationContext = '';
+  if (history.length > 0) {
+    conversationContext = '\n\n=== ИСТОРИЯ ДИАЛОГА ===\n';
+    history.slice(-6).forEach(msg => {
+      conversationContext += `${msg.role === 'user' ? 'Пользователь' : 'Ассистент'}: ${msg.content.slice(0, 200)}\n`;
+    });
+  }
 
-${hasProject ? `ACTIVE PROJECT:\n${context}\n\nYou are currently working on this project. The user can ask you to modify, edit, or add features to it.` : 'No project is currently open.'}
-
-YOUR CAPABILITIES:
-- Create complete React Native mobile apps from scratch
-- Edit existing files and add new features
-- Understand project context and continue where you left off
-- Run terminal commands (npm install, expo start, etc.)
-- Check console for errors and auto-fix them
-
-RESPONSE RULES:
-${hasProject ? `
-- You KNOW this project. Greet the user and offer to help with the current app.
-- If user says "hi/привет", briefly describe what the project does and ask how to help.
-- When user asks to modify something, DO IT - don't just explain how.
-- Be proactive - suggest improvements based on the current code.
-` : `
-- No project is open. Ask user what app they want to create.
-- Be ready to generate a complete app structure.
-`}
-- Use markdown for code snippets
-- Be concise but helpful
-- NEVER just explain how to do something - ACTUALLY DO IT by generating code`;
-
-  const result = await model.generateContent(`${systemPrompt}\n\nUser: ${message}`);
+  const result = await model.generateContent(`${systemPrompt}${conversationContext}\n\nПользователь: ${message}`);
   return result.response.text();
 }
 
@@ -54,22 +92,34 @@ ${hasProject ? `
 async function chatWithOpenAI(
   message: string, 
   context: string, 
-  apiKey: string
+  apiKey: string,
+  history: Array<{ role: string; content: string }> = []
 ): Promise<string> {
   const hasProject = context && context.includes('Current project:');
   
-  const systemPrompt = `You are CapyCode AI - an intelligent assistant that builds React Native / Expo mobile apps.
-
-${hasProject ? `ACTIVE PROJECT:\n${context}\n\nYou are working on this project. Help the user modify, edit, or add features.` : 'No project is currently open.'}
-
-RULES:
-${hasProject ? `
-- You KNOW this project. Greet and offer to help with the current app.
-- When user says "hi", briefly describe what the project does.
-- When asked to modify something, DO IT - generate the code.
-` : `- No project open. Ask what app to create.`}
-- Use markdown for code
-- NEVER just explain - ACTUALLY generate code when asked`;
+  // Build prompt with context
+  let systemPrompt = CHAT_SYSTEM_PROMPT.replace(
+    'ACTIVE_PROJECT_PLACEHOLDER',
+    hasProject 
+      ? `Текущий проект:\n${context}` 
+      : 'Проект не открыт. Спроси пользователя, какое приложение он хочет создать.'
+  );
+  
+  // Build messages array with history
+  const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+    { role: 'system', content: systemPrompt }
+  ];
+  
+  // Add conversation history
+  history.slice(-6).forEach(msg => {
+    messages.push({
+      role: msg.role as 'user' | 'assistant',
+      content: msg.content.slice(0, 500)
+    });
+  });
+  
+  // Add current message
+  messages.push({ role: 'user', content: message });
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -79,11 +129,8 @@ ${hasProject ? `
     },
     body: JSON.stringify({
       model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: message }
-      ],
-      max_tokens: 1500,
+      messages,
+      max_tokens: 1000,
       temperature: 0.7,
     }),
   });
@@ -101,17 +148,32 @@ ${hasProject ? `
 async function chatWithAnthropic(
   message: string, 
   context: string, 
-  apiKey: string
+  apiKey: string,
+  history: Array<{ role: string; content: string }> = []
 ): Promise<string> {
   const hasProject = context && context.includes('Current project:');
   
-  const systemPrompt = `You are CapyCode AI - an intelligent assistant that builds React Native / Expo mobile apps.
-
-${hasProject ? `ACTIVE PROJECT:\n${context}\n\nYou are working on this project.` : 'No project is currently open.'}
-
-RULES:
-${hasProject ? `- You KNOW this project. When user says hi, describe the app and offer to help.` : `- Ask what app to create.`}
-- Use markdown for code. NEVER just explain - generate code when asked.`;
+  // Build prompt with context
+  let systemPrompt = CHAT_SYSTEM_PROMPT.replace(
+    'ACTIVE_PROJECT_PLACEHOLDER',
+    hasProject 
+      ? `Текущий проект:\n${context}` 
+      : 'Проект не открыт. Спроси пользователя, какое приложение он хочет создать.'
+  );
+  
+  // Build messages array with history
+  const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  
+  // Add conversation history
+  history.slice(-6).forEach(msg => {
+    messages.push({
+      role: msg.role as 'user' | 'assistant',
+      content: msg.content.slice(0, 500)
+    });
+  });
+  
+  // Add current message
+  messages.push({ role: 'user', content: message });
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -122,9 +184,9 @@ ${hasProject ? `- You KNOW this project. When user says hi, describe the app and
     },
     body: JSON.stringify({
       model: 'claude-3-haiku-20240307',
-      max_tokens: 1500,
+      max_tokens: 1000,
       system: systemPrompt,
-      messages: [{ role: 'user', content: message }],
+      messages,
     }),
   });
 
@@ -162,7 +224,7 @@ async function getUserApiKeys(userId: string): Promise<{ key: string; provider: 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { message, context, apiKey, provider, userId } = body;
+    const { message, context, apiKey, provider, userId, history = [] } = body;
 
     if (!message) {
       return NextResponse.json({ error: 'Message is required' }, { status: 400 });
@@ -201,14 +263,14 @@ export async function POST(request: NextRequest) {
     
     switch (actualProvider) {
       case 'openai':
-        response = await chatWithOpenAI(message, context || '', actualKey);
+        response = await chatWithOpenAI(message, context || '', actualKey, history);
         break;
       case 'anthropic':
-        response = await chatWithAnthropic(message, context || '', actualKey);
+        response = await chatWithAnthropic(message, context || '', actualKey, history);
         break;
       case 'google':
       default:
-        response = await chatWithGemini(message, context || '', actualKey);
+        response = await chatWithGemini(message, context || '', actualKey, history);
         break;
     }
 
