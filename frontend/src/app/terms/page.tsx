@@ -106,7 +106,7 @@ export default function TermsPage() {
       {/* Header */}
       <Header showBack backTo="/dashboard" backLabel="Dashboard" />
 
-      <main className="relative z-10">
+      <main className="relative z-10 pt-20">
         {/* Hero */}
         <section className="py-24 px-6">
           <div className="max-w-4xl mx-auto text-center">

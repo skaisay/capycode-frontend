@@ -403,8 +403,17 @@ export default function DashboardPage() {
       </div>
 
       {/* Header */}
-      <header className="border-b border-[#1f1f23]/50 bg-[#0a0a0b]/80 backdrop-blur-xl sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+      <header className="fixed top-0 left-0 right-0 z-50">
+        {/* Blur gradient background */}
+        <div 
+          className="absolute inset-x-0 top-0 h-20 backdrop-blur-xl"
+          style={{
+            background: 'linear-gradient(to bottom, rgba(10, 10, 11, 0.95) 0%, rgba(10, 10, 11, 0.8) 50%, rgba(10, 10, 11, 0) 100%)',
+            maskImage: 'linear-gradient(to bottom, black 0%, black 60%, transparent 100%)',
+            WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 60%, transparent 100%)'
+          }}
+        />
+        <div className="relative max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-3">
             <Image src="/logo.png" alt="CapyCode" width={32} height={32} className="rounded-lg" />
             <span className="text-lg font-semibold text-white">CapyCode</span>
@@ -472,7 +481,7 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <main className="relative z-10 max-w-7xl mx-auto px-6 py-8">
+      <main className="relative z-10 max-w-7xl mx-auto px-6 py-8 pt-24">
         {activeTab === 'overview' && (
           <>
             {/* Welcome Animation */}

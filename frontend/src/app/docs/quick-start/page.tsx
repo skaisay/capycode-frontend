@@ -16,7 +16,7 @@ export default function QuickStartPage() {
 
       <Header showBack backTo="/docs" backLabel="Documentation" />
 
-      <main className="relative z-10 py-12 px-6">
+      <main className="relative z-10 pt-20 py-12 px-6">
         <div className="max-w-4xl mx-auto">
           {/* Header */}
           <motion.div

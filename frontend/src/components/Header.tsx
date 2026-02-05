@@ -62,8 +62,17 @@ export default function Header({ showBack, backTo = '/dashboard', backLabel = 'B
   };
 
   return (
-    <header className="relative z-10 border-b border-[#1f1f23]/50">
-      <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+    <header className="fixed top-0 left-0 right-0 z-50">
+      {/* Blur gradient background like homepage */}
+      <div 
+        className="absolute inset-x-0 top-0 h-24 backdrop-blur-xl"
+        style={{
+          background: 'linear-gradient(to bottom, rgba(10, 10, 11, 0.95) 0%, rgba(10, 10, 11, 0.8) 50%, rgba(10, 10, 11, 0) 100%)',
+          maskImage: 'linear-gradient(to bottom, black 0%, black 60%, transparent 100%)',
+          WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 60%, transparent 100%)'
+        }}
+      />
+      <div className="relative max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
           {showBack && (
             <>

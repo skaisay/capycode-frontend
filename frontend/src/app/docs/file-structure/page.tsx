@@ -15,7 +15,7 @@ export default function FileStructurePage() {
 
       <Header showBack backTo="/docs" backLabel="Documentation" />
 
-      <main className="relative z-10 py-12 px-6">
+      <main className="relative z-10 pt-20 py-12 px-6">
         <div className="max-w-4xl mx-auto">
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-12">
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 mb-4">
