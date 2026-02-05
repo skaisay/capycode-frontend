@@ -112,10 +112,21 @@ const getCurrentUserId = (): string => {
   return 'anonymous';
 };
 
+// Get current project ID from URL
+const getCurrentProjectId = (): string => {
+  if (typeof window === 'undefined') return 'new';
+  try {
+    const urlParams = new URLSearchParams(window.location.search);
+    const projectId = urlParams.get('project');
+    if (projectId) return projectId;
+  } catch (e) {}
+  return 'new'; // New project (no ID yet)
+};
+
 const getStorageKey = (key: string): string => `capycode_${getCurrentUserId()}_${key}`;
 
-// Local storage keys (user-isolated)
-const getChatStorageKey = () => getStorageKey('chat_history');
+// Chat history is per-project to avoid mixing histories
+const getChatStorageKey = () => `capycode_${getCurrentUserId()}_${getCurrentProjectId()}_chat_history`;
 const getSelectedKeyStorage = () => getStorageKey('selected_api_key');
 
 // Get saved selected key from localStorage (user-isolated)
@@ -263,18 +274,34 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
     }
   }, [showBackupsDropdown]);
 
-  // Load chat history from localStorage (user-isolated)
+  // Load chat history from localStorage (per-project)
+  // When project changes, load appropriate history
   useEffect(() => {
-    const saved = localStorage.getItem(getChatStorageKey());
+    const projectId = getCurrentProjectId();
+    const chatKey = getChatStorageKey();
+    
+    // If this is a NEW project (no ID), start with empty history
+    if (projectId === 'new') {
+      setChatHistory([]);
+      return;
+    }
+    
+    // Load saved history for this specific project
+    const saved = localStorage.getItem(chatKey);
     if (saved) {
       try {
-        setChatHistory(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        setChatHistory(parsed);
       } catch {
-        // Invalid JSON, ignore
+        setChatHistory([]);
       }
+    } else {
+      // No history for this project - start fresh
+      setChatHistory([]);
     }
+    
     checkAIStatus();
-  }, []);
+  }, []); // eslint-disable-line - run once on mount
 
   // Handle initial prompt from dashboard - auto-submit
   useEffect(() => {
@@ -558,20 +585,27 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
       // "Tell me about" (informational)
       /(расскажи|рассказать|объясни|объяснить|подскажи|подсказать)\s+(что|как|почему|зачем)/i,
       /(что ты сделал|что сделала|что было сделано)/i,
-      // Pure greetings - extended patterns
+      // Pure greetings - extended patterns (anywhere, not just start)
       /^(привет|hello|hi|hey|здравствуй|здорово|хай|йо|салют|приветик)[\s!.,?]*$/i,
-      /^(привет|hello|hi|hey).{0,10}$/i, // Short greetings with minor additions
-      // Conversational questions
-      /^(как дела|как ты|что нового|что делаешь)[\s!?,]*$/i,
-      /^(how are you|what's up|how's it going)[\s!?,]*$/i,
-      // Affirmative/short responses
-      /^(да|нет|ок|окей|хорошо|понял|ясно|круто|класс|отлично|супер)[\s!.,?]*$/i,
-      /^(yes|no|ok|okay|sure|got it|understood|cool|great|nice|awesome)[\s!.,?]*$/i,
+      /^(привет|hello|hi|hey).{0,20}$/i, // Short greetings with minor additions up to 20 chars
+      // Conversational questions - FLEXIBLE (can have more text after)
+      /^как (дела|ты|поживаешь|настроение)/i, // "как дела", "как ты", "как настроение" etc
+      /^(как у тебя|как твои|что нового|что делаешь)/i,
+      /(как дела|как настроение|как поживаешь|как у тебя дела)/i, // Anywhere in text
+      /^(how are you|what's up|how's it going|how do you do)/i,
+      /(how are you|what's up|how's it going)/i, // Anywhere in text
+      // Affirmative/short responses - extended
+      /^(да|нет|ок|окей|хорошо|понял|ясно|круто|класс|отлично|супер|норм|нормально|збс|отл|ладно|чётко)[\s!.,?]*$/i,
+      /^(yes|no|ok|okay|sure|got it|understood|cool|great|nice|awesome|yep|nope|alright)[\s!.,?]*$/i,
       // Pure thanks
       /^(спасибо|благодарю|thanks|thank you|thx)[\s!.,?]*$/i,
       // Questions about AI
       /^(кто ты|что ты|ты кто|who are you|what are you)[\s!?,]*$/i,
       /^(что ты умеешь|что можешь|what can you do)[\s!?,]*$/i,
+      // Emotional/casual responses (shouldn't trigger generation)
+      /^(ахах|хаха|лол|ржу|смешно|прикольно|lol|haha|lmao|nice one)[\s!.,?]*$/i,
+      // Short questions without action intent
+      /^(правда|серьёзно|реально|точно|уверен|really|seriously|for real)[\s!?,]*$/i,
     ];
     
     for (const pattern of pureQuestionPatterns) {
