@@ -54,6 +54,20 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 export function IDELayout() {
   const searchParams = useSearchParams();
+  
+  // Project store - must be declared before any useEffect that uses it
+  const { 
+    project, 
+    currentFile, 
+    setCurrentFile,
+    updateFileContent,
+    isLoading,
+    loadProject,
+    reset: resetProject
+  } = useProjectStore();
+
+  const { generateProject, isGenerating, progress, cancelGeneration } = useGenerateProject();
+  
   // Read prompt from localStorage instead of URL to avoid URI_TOO_LONG errors
   const [initialPrompt, setInitialPrompt] = useState('');
   const [initialModel, setInitialModel] = useState<string | null>(null);
@@ -106,18 +120,6 @@ export function IDELayout() {
     originalContent: string;
     modifiedContent: string;
   } | null>(null);
-  
-  const { 
-    project, 
-    currentFile, 
-    setCurrentFile,
-    updateFileContent,
-    isLoading,
-    loadProject,
-    reset: resetProject
-  } = useProjectStore();
-
-  const { generateProject, isGenerating, progress, cancelGeneration } = useGenerateProject();
   
   // Track if we're in a generation session (even after component re-renders)
   // Check localStorage directly since initialPrompt isn't set yet at component mount
