@@ -454,20 +454,9 @@ export const useProjectStore = create<ProjectState>()(
   )
 );
 
-// Auto-restore last project on load
-if (typeof window !== 'undefined') {
-  // Delay to ensure store is ready
-  setTimeout(() => {
-    const currentProjectId = localStorage.getItem('capycode_current_project_id');
-    if (currentProjectId) {
-      const fullProject = loadFullProject(currentProjectId);
-      if (fullProject) {
-        useProjectStore.getState().setProject(fullProject);
-        console.log('[ProjectStore] Restored project:', fullProject.name);
-      }
-    }
-  }, 100);
-}
+// DISABLED: Auto-restore was causing bugs - new projects were being overwritten
+// Restoration now happens explicitly in components that need it
+// if (typeof window !== 'undefined') { ... }
 
 // Selectors
 export const selectProject = (state: ProjectState) => state.project;

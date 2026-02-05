@@ -44,6 +44,7 @@ export function IDELayout() {
   const [initialApiKeyId, setInitialApiKeyId] = useState<string | null>(null);
   const [autoSelectKey, setAutoSelectKey] = useState(false);
   const [pendingUserId, setPendingUserId] = useState<string | null>(null);
+  const [shouldRestoreProject, setShouldRestoreProject] = useState(false);
   
   // Load pending prompt from localStorage on mount
   useEffect(() => {
@@ -54,6 +55,7 @@ export function IDELayout() {
     const pendingUser = localStorage.getItem('pending_userId');
     
     if (pendingPrompt) {
+      // New project generation - don't restore old project
       setInitialPrompt(pendingPrompt);
       setInitialModel(pendingModel);
       setInitialApiKeyId(pendingApiKeyId);
@@ -65,6 +67,9 @@ export function IDELayout() {
       localStorage.removeItem('pending_apiKeyId');
       localStorage.removeItem('pending_autoSelectKey');
       localStorage.removeItem('pending_userId');
+    } else {
+      // No pending prompt - we can restore previous project
+      setShouldRestoreProject(true);
     }
   }, []);
   
@@ -81,10 +86,44 @@ export function IDELayout() {
     currentFile, 
     setCurrentFile,
     updateFileContent,
-    isLoading 
+    isLoading,
+    loadProject 
   } = useProjectStore();
 
   const { generateProject, isGenerating, progress, cancelGeneration } = useGenerateProject();
+  
+  // Track if we're in a generation session (even after component re-renders)
+  // Check localStorage directly since initialPrompt isn't set yet at component mount
+  const [generationStarted, setGenerationStarted] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return !!localStorage.getItem('pending_prompt');
+    }
+    return false;
+  });
+  
+  // Mark generation as started when isGenerating becomes true
+  useEffect(() => {
+    if (isGenerating) {
+      setGenerationStarted(true);
+    }
+  }, [isGenerating]);
+  
+  // Restore previous project ONLY if:
+  // 1. No pending prompt (not a new generation)
+  // 2. No generation is in progress
+  // 3. Generation hasn't been started in this session
+  // 4. No active generation flag in localStorage
+  useEffect(() => {
+    const isGeneratingInStorage = typeof window !== 'undefined' && localStorage.getItem('capycode_generating') === 'true';
+    
+    if (shouldRestoreProject && !project && !isGenerating && !generationStarted && !initialPrompt && !isGeneratingInStorage) {
+      const currentProjectId = localStorage.getItem('capycode_current_project_id');
+      if (currentProjectId) {
+        console.log('[IDELayout] Restoring project:', currentProjectId);
+        loadProject(currentProjectId);
+      }
+    }
+  }, [shouldRestoreProject, project, loadProject, isGenerating, generationStarted, initialPrompt]);
   
   // Element selector store for AI chat integration
   const { selectedElements, getSelectionDescription, clearSelectedElements } = useElementSelectorStore();

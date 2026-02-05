@@ -609,6 +609,15 @@ export async function generateWithGemini(
   
   const userPrompt = buildUserPrompt(prompt);
   
+  // Detect if this is an element selection edit - use much lower temperature
+  const isElementEdit = prompt.includes('[Выбранный элемент:') || prompt.includes('[Выбранные элементы:');
+  const isEditMode = prompt.includes('EXISTING PROJECT CONTEXT') || prompt.includes('ELEMENT SELECTION MODE');
+  
+  // Lower temperature for edits (0.2) to be more precise, higher for new apps (0.5)
+  const temperature = isElementEdit ? 0.1 : (isEditMode ? 0.2 : 0.5);
+  
+  console.log(`[Gemini] Starting generation, model: ${model}, temp: ${temperature}, isEdit: ${isEditMode}, isElementEdit: ${isElementEdit}`);
+  
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   
   const response = await fetch(url, {
@@ -627,7 +636,7 @@ export async function generateWithGemini(
         }
       ],
       generationConfig: {
-        temperature: 0.8,
+        temperature: temperature,
         topK: 40,
         topP: 0.95,
         maxOutputTokens: 8192,
@@ -692,16 +701,43 @@ function buildUserPrompt(prompt: string): string {
   if (isEditMode) {
     // Check if user selected specific elements
     const hasSelectedElement = prompt.includes('[Выбранный элемент:') || prompt.includes('[Выбранные элементы:');
-    const elementContext = hasSelectedElement 
-      ? `\n\n🎯 USER SELECTED SPECIFIC ELEMENT(S) IN THE PREVIEW!\nThe element info above shows EXACTLY which component to modify.\nYou MUST change ONLY that specific component/element, nothing else!`
-      : '';
     
+    // SUPER STRICT mode for element selection
+    if (hasSelectedElement) {
+      return `${prompt}
+
+=== 🎯 ELEMENT SELECTION MODE - ULTRA PRECISE ===
+User selected a SPECIFIC ELEMENT in the preview!
+
+⛔ CRITICAL: CHANGE ONLY THE SELECTED ELEMENT! ⛔
+
+The text "[Выбранный элемент: ...]" tells you EXACTLY which component to modify.
+Example: "[Выбранный элемент: Button 'Сохранить']" → Find the Save button, change ONLY it.
+
+🔴 ABSOLUTE RESTRICTIONS:
+1. Find the EXACT element/component mentioned
+2. Apply ONLY the change user requested (color, size, text, position)
+3. Touch NOTHING else in that file
+4. Do NOT rewrite other files
+5. Do NOT restructure anything
+6. Do NOT "improve" other code
+7. Copy ALL other files EXACTLY byte-for-byte
+
+📝 EXAMPLE:
+User: "[Выбранный элемент: Button 'Send'] Сделай красным"
+CORRECT: Change backgroundColor of that one button to red
+WRONG: Rewrite the whole screen, change app structure
+
+Return ALL original files. Modified file has 1-3 lines changed, max.
+If you change more than 5 lines total, you are doing it WRONG!`;
+    }
+    
+    // Regular edit mode (no element selected)
     return `${prompt}
 
 === ⚠️ EDIT MODE - MINIMAL CHANGES ONLY ===
 This is an EDIT request, NOT a new app creation.
 ${languageInstruction}
-${elementContext}
 
 🔒 ABSOLUTE RULES FOR EDITING:
 
@@ -866,6 +902,13 @@ export async function generateWithOpenAI(
   
   const userPrompt = buildUserPrompt(prompt);
   
+  // Detect if this is an element selection edit - use much lower temperature
+  const isElementEdit = prompt.includes('[Выбранный элемент:') || prompt.includes('[Выбранные элементы:');
+  const isEditMode = prompt.includes('EXISTING PROJECT CONTEXT') || prompt.includes('ELEMENT SELECTION MODE');
+  
+  // Lower temperature for edits (0.2) to be more precise, higher for new apps (0.5)
+  const temperature = isElementEdit ? 0.1 : (isEditMode ? 0.2 : 0.5);
+  
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -879,11 +922,11 @@ export async function generateWithOpenAI(
         { role: 'user', content: userPrompt }
       ],
       max_tokens: 16384,
-      temperature: 0.8,
+      temperature: temperature,
     }),
   });
   
-  console.log(`[OpenAI] Response received in ${Date.now() - startTime}ms, status: ${response.status}`);
+  console.log(`[OpenAI] Response received in ${Date.now() - startTime}ms, status: ${response.status}, temp: ${temperature}`);
   
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));

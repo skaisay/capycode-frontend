@@ -447,11 +447,41 @@ export function useGenerateProject(options: UseGenerateProjectOptions = {}) {
     if (isEdit && existingFiles.length > 0) {
       const filesSummary = existingFiles.map(f => `- ${f.path}`).join('\n');
       const mainFiles = existingFiles
-        .filter(f => f.path.includes('App.tsx') || f.path.includes('index.tsx') || f.path.includes('screens/'))
-        .slice(0, 3)
-        .map(f => `\n--- ${f.path} ---\n${f.content.substring(0, 1000)}${f.content.length > 1000 ? '...' : ''}`);
+        .filter(f => f.path.includes('App.tsx') || f.path.includes('index.tsx') || f.path.includes('screens/') || f.path.includes('components/'))
+        .slice(0, 8)
+        .map(f => `\n--- ${f.path} ---\n${f.content}`);
       
-      contextPrompt = `EXISTING PROJECT CONTEXT:
+      // Check if user selected a specific element (element selector mode)
+      const isElementSelection = prompt.includes('[Выбранный элемент:') || prompt.includes('[Выбранные элементы:');
+      
+      if (isElementSelection) {
+        // ELEMENT SELECTION MODE - be super strict, send ALL files with FULL content
+        const allFilesContent = existingFiles
+          .map(f => `\n=== FILE: ${f.path} ===\n${f.content}\n=== END ${f.path} ===`)
+          .join('\n');
+        
+        contextPrompt = `⚠️ ELEMENT SELECTION MODE - CRITICAL ⚠️
+
+The user selected a SPECIFIC UI element and wants to change ONLY that element!
+
+ALL PROJECT FILES (${existingFiles.length} files):
+${allFilesContent}
+
+USER REQUEST WITH SELECTED ELEMENT:
+${prompt}
+
+🚫 ABSOLUTE RULES:
+1. Find the EXACT element mentioned in [Выбранный элемент: ...]
+2. Change ONLY that one element's property (color, size, text, etc.)
+3. Return ALL files - modified file has 1-5 lines changed MAX
+4. Do NOT restructure, refactor, or "improve" anything
+5. Do NOT create new files or delete existing files
+6. Copy unmodified files EXACTLY as they are (byte-for-byte)
+
+If you change more than 10 lines total, YOU ARE WRONG!`;
+      } else {
+        // Regular edit mode
+        contextPrompt = `EXISTING PROJECT CONTEXT:
 Files in project:
 ${filesSummary}
 
@@ -461,6 +491,7 @@ ${mainFiles.join('\n')}
 USER REQUEST: ${prompt}
 
 Please modify the existing project based on the user's request. Keep existing functionality and only change what's needed.`;
+      }
     }
     
     // Call our API route
@@ -598,6 +629,11 @@ Please modify the existing project based on the user's request. Keep existing fu
       const userId = typeof promptOrConfig === 'string' ? undefined : promptOrConfig.userId;
       const isEdit = typeof promptOrConfig === 'string' ? false : promptOrConfig.isEdit;
       
+      // Set flag to prevent project restoration during generation
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('capycode_generating', 'true');
+      }
+      
       // Only reset project for new generation, not for edits
       if (!isEdit) {
         resetProjectStore();
@@ -630,6 +666,11 @@ Please modify the existing project based on the user's request. Keep existing fu
         : mutation.variables?.prompt;
       logGeneration(promptText, 'completed').catch(console.error);
       
+      // Clear generation flag
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('capycode_generating');
+      }
+      
       // Get current project from store - files were already added progressively
       const currentProject = useProjectStore.getState().project;
       const isEditMode = typeof mutation.variables === 'object' && mutation.variables?.isEdit;
@@ -658,6 +699,11 @@ Please modify the existing project based on the user's request. Keep existing fu
         message: 'Generation failed',
         progress: 0,
       });
+      
+      // Clear generation flag
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('capycode_generating');
+      }
       
       // Log failed generation
       const promptText = typeof mutation.variables === 'string' 

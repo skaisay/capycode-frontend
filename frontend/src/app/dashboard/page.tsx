@@ -89,8 +89,31 @@ export default function DashboardPage() {
   
   // API Key form
   const [showApiForm, setShowApiForm] = useState(false);
-  const [newApiKey, setNewApiKey] = useState({ name: '', key: '', provider: 'openai' as const });
+  const [newApiKey, setNewApiKey] = useState<{ name: string; key: string; provider: 'openai' | 'anthropic' | 'google' | 'custom' }>({ name: '', key: '', provider: 'openai' });
   const [savingApiKey, setSavingApiKey] = useState(false);
+  
+  // Auto-detect provider from API key
+  const detectProviderFromKey = (key: string): 'openai' | 'anthropic' | 'google' | 'custom' => {
+    const trimmedKey = key.trim();
+    if (trimmedKey.startsWith('sk-ant-') || trimmedKey.startsWith('sk-ant')) {
+      return 'anthropic';
+    } else if (trimmedKey.startsWith('sk-')) {
+      return 'openai';
+    } else if (trimmedKey.startsWith('AIza')) {
+      return 'google';
+    }
+    return 'custom';
+  };
+  
+  // Handle API key input with auto-detection
+  const handleApiKeyChange = (key: string) => {
+    const detectedProvider = detectProviderFromKey(key);
+    setNewApiKey({ 
+      ...newApiKey, 
+      key, 
+      provider: key.length > 3 ? detectedProvider : newApiKey.provider 
+    });
+  };
 
   useEffect(() => {
     checkUser();
@@ -839,10 +862,17 @@ export default function DashboardPage() {
                     <input
                       type="password"
                       value={newApiKey.key}
-                      onChange={(e) => setNewApiKey({ ...newApiKey, key: e.target.value })}
-                      placeholder="sk-..."
+                      onChange={(e) => handleApiKeyChange(e.target.value)}
+                      placeholder="sk-... or AIza..."
                       className="w-full px-4 py-2.5 bg-[#0a0a0b] border border-[#1f1f23] rounded-lg text-white placeholder-[#4a4a4e] focus:border-emerald-500/50 focus:outline-none"
                     />
+                    {newApiKey.key.length > 3 && (
+                      <p className="text-xs text-emerald-500 mt-1">
+                        Auto-detected: {newApiKey.provider === 'openai' ? 'OpenAI' : 
+                                        newApiKey.provider === 'anthropic' ? 'Anthropic' : 
+                                        newApiKey.provider === 'google' ? 'Google AI' : 'Custom'}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="flex justify-end gap-3">
