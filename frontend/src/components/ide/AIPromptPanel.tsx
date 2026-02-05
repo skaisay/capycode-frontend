@@ -2030,7 +2030,7 @@ ${err.message || 'An unexpected error occurred.'}
                             ) : null}
                           </div>
                           
-                          <p className="text-xs text-[#6b6b70] mb-2">{key.keyPreview}</p>
+                          <p className="text-xs text-[#6b6b70] mb-2 truncate max-w-full overflow-hidden">{key.keyPreview}</p>
                           
                           {/* Status message */}
                           {checkResult && !isChecking && (

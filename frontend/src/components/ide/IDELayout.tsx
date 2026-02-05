@@ -71,7 +71,9 @@ export function IDELayout() {
     const pendingUser = localStorage.getItem('pending_userId');
     
     if (pendingPrompt) {
-      // New project generation - don't restore old project
+      // New project generation - CLEAR old project data first!
+      resetProject();
+      
       setInitialPrompt(pendingPrompt);
       setInitialModel(pendingModel);
       setInitialApiKeyId(pendingApiKeyId);
@@ -87,7 +89,7 @@ export function IDELayout() {
       // No pending prompt - we can restore previous project
       setShouldRestoreProject(true);
     }
-  }, []);
+  }, [resetProject]);
   
   const [activeView, setActiveView] = useState<'preview' | 'code' | 'build'>('preview');
   const [showFiles, setShowFiles] = useState(false);
@@ -111,7 +113,8 @@ export function IDELayout() {
     setCurrentFile,
     updateFileContent,
     isLoading,
-    loadProject 
+    loadProject,
+    reset: resetProject
   } = useProjectStore();
 
   const { generateProject, isGenerating, progress, cancelGeneration } = useGenerateProject();
