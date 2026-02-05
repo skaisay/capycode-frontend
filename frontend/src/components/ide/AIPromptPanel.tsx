@@ -161,6 +161,10 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
   const [showTerminal, setShowTerminal] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
   const [showElementSelection, setShowElementSelection] = useState(false);
+  const [showKeyChecker, setShowKeyChecker] = useState(false);
+  const [keyCheckResults, setKeyCheckResults] = useState<Map<string, { status: 'checking' | 'valid' | 'error' | 'quota'; models: string[]; error?: string }>>(new Map());
+  const [isCheckingKeys, setIsCheckingKeys] = useState(false);
+  const [failedPrompt, setFailedPrompt] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const backupsDropdownRef = useRef<HTMLDivElement>(null);
   
@@ -257,6 +261,106 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
       ));
     } catch (error) {
       console.error('Failed to validate key:', key.name, error);
+    }
+  };
+
+  // Check all API keys and their available models (for error recovery)
+  const checkAllApiKeys = async () => {
+    if (userApiKeys.length === 0) {
+      await loadUserApiKeys();
+    }
+    
+    setIsCheckingKeys(true);
+    setShowKeyChecker(true);
+    const results = new Map<string, { status: 'checking' | 'valid' | 'error' | 'quota'; models: string[]; error?: string }>();
+    
+    // Set all to checking
+    for (const key of userApiKeys) {
+      results.set(key.id, { status: 'checking', models: [] });
+    }
+    setKeyCheckResults(new Map(results));
+    
+    // Check all keys in parallel with timeout
+    const checkPromises = userApiKeys.map(async (key) => {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+        
+        const response = await fetch('/api/keys/check-models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            keyId: key.id,
+            encryptedKey: key.encryptedKey,
+            provider: key.provider,
+          }),
+          signal: controller.signal,
+        });
+        
+        clearTimeout(timeoutId);
+        const result = await response.json();
+        
+        if (result.valid) {
+          results.set(key.id, { 
+            status: 'valid', 
+            models: result.availableModels || [] 
+          });
+        } else if (result.isQuota) {
+          results.set(key.id, { 
+            status: 'quota', 
+            models: [],
+            error: 'Лимит исчерпан'
+          });
+        } else {
+          results.set(key.id, { 
+            status: 'error', 
+            models: [],
+            error: result.error || 'Ключ недействителен'
+          });
+        }
+      } catch (error: any) {
+        results.set(key.id, { 
+          status: 'error', 
+          models: [],
+          error: error.name === 'AbortError' ? 'Таймаут' : 'Ошибка проверки'
+        });
+      }
+      
+      setKeyCheckResults(new Map(results));
+    });
+    
+    await Promise.all(checkPromises);
+    setIsCheckingKeys(false);
+  };
+
+  // Apply selected key and retry failed prompt
+  const applyKeyAndRetry = async (keyId: string, model?: string) => {
+    const key = userApiKeys.find(k => k.id === keyId);
+    if (!key) return;
+    
+    // Save selected key and model
+    setSelectedUserKey(keyId);
+    if (model) {
+      setSelectedModel(model as AIModel);
+      localStorage.setItem('selected_model', model);
+    }
+    localStorage.setItem('selected_user_key', keyId);
+    
+    // Close key checker
+    setShowKeyChecker(false);
+    
+    // Retry the failed prompt
+    if (failedPrompt) {
+      const promptToRetry = failedPrompt;
+      setFailedPrompt(null);
+      
+      // Set prompt and trigger submit via useEffect or direct call
+      setPrompt(promptToRetry);
+      // Small delay to let state update, then submit
+      setTimeout(() => {
+        const submitBtn = document.querySelector('[data-testid="submit-btn"]') as HTMLButtonElement;
+        if (submitBtn) submitBtn.click();
+      }, 100);
     }
   };
 
@@ -372,10 +476,13 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
           };
           setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? successMessage : msg));
         } catch (err: any) {
+          // Save failed prompt for retry
+          setFailedPrompt(initialPrompt);
+          
           const errorMessage: ChatMessage = {
             id: thinkingMessageId,
             role: 'assistant',
-            content: `**Generation failed**\n\n${err.message || 'Unknown error'}\n\nPlease try again or check your API keys.`,
+            content: `**Ошибка генерации**\n\n${err.message || 'Неизвестная ошибка'}\n\nНажмите "Проверить ключи" ниже, чтобы найти рабочий ключ и повторить попытку.`,
             timestamp: Date.now(),
             status: 'error',
           };
@@ -986,6 +1093,9 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
       // Replace thinking message with success message
       setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? assistantMessage : msg));
     } catch (err: any) {
+      // Save failed prompt for retry
+      setFailedPrompt(userPrompt);
+      
       // Generate detailed error message
       const errorContent = getDetailedErrorMessage(err);
       
@@ -1406,11 +1516,21 @@ ${err.message || 'An unexpected error occurred.'}
                           <AlertTriangle className="w-4 h-4 text-red-400" />
                           <span className="text-sm font-medium text-red-400">Ошибка</span>
                         </div>
-                        <div className="text-sm text-[#e5e5e5] leading-relaxed whitespace-pre-wrap">
+                        <div className="text-sm text-[#e5e5e5] leading-relaxed whitespace-pre-wrap mb-4">
                           {message.content.split('**').map((part, i) => 
                             i % 2 === 1 ? <strong key={i} className="text-white font-semibold">{part}</strong> : part
                           )}
                         </div>
+                        {/* Check Keys Button */}
+                        <button
+                          onClick={() => {
+                            checkAllApiKeys();
+                          }}
+                          className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg transition-colors"
+                        >
+                          <Key className="w-4 h-4" />
+                          Проверить ключи
+                        </button>
                       </div>
                     ) : message.status === 'thinking' ? (
                       /* Working status with file indicator */
@@ -1799,6 +1919,7 @@ ${err.message || 'An unexpected error occurred.'}
             <button
               onClick={handleSubmit}
               disabled={!prompt.trim() || isGenerating}
+              data-testid="submit-btn"
               className="p-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-500 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
               title={isGenerating ? "Генерация..." : "Отправить"}
             >
@@ -1811,6 +1932,167 @@ ${err.message || 'An unexpected error occurred.'}
           </div>
         </div>
       </div>
+      
+      {/* Key Checker Modal */}
+      <AnimatePresence>
+        {showKeyChecker && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowKeyChecker(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-[#0a0a0b] border border-[#1f1f23] rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between p-4 border-b border-[#1f1f23]">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-600/20 flex items-center justify-center">
+                    <Key className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-white">Проверка API ключей</h3>
+                    <p className="text-xs text-[#6b6b70]">Выберите рабочий ключ для продолжения</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowKeyChecker(false)}
+                  className="p-2 hover:bg-[#1f1f23] rounded-lg transition-colors"
+                >
+                  <X className="w-4 h-4 text-[#6b6b70]" />
+                </button>
+              </div>
+              
+              {/* Content */}
+              <div className="p-4 max-h-[400px] overflow-y-auto">
+                {userApiKeys.length === 0 ? (
+                  <div className="text-center py-8">
+                    <Key className="w-12 h-12 mx-auto mb-3 text-[#3b3b40]" />
+                    <p className="text-[#9a9aa0] mb-2">Нет API ключей</p>
+                    <p className="text-xs text-[#6b6b70] mb-4">Добавьте ключ в настройках для генерации приложений</p>
+                    <a
+                      href="/dashboard?tab=settings"
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg transition-colors"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      Открыть настройки
+                    </a>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {userApiKeys.map((key) => {
+                      const checkResult = keyCheckResults.get(key.id);
+                      const isValid = checkResult?.status === 'valid';
+                      const isChecking = checkResult?.status === 'checking';
+                      const isQuota = checkResult?.status === 'quota';
+                      const isError = checkResult?.status === 'error';
+                      
+                      return (
+                        <div
+                          key={key.id}
+                          className={`p-4 rounded-xl border transition-all ${
+                            isValid 
+                              ? 'bg-emerald-500/10 border-emerald-500/30' 
+                              : isQuota
+                                ? 'bg-amber-500/10 border-amber-500/30'
+                                : isError
+                                  ? 'bg-red-500/10 border-red-500/30'
+                                  : 'bg-[#111113] border-[#1f1f23]'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-white">{key.name}</span>
+                              <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                key.provider === 'google' ? 'bg-blue-500/20 text-blue-400' :
+                                key.provider === 'openai' ? 'bg-green-500/20 text-green-400' :
+                                'bg-purple-500/20 text-purple-400'
+                              }`}>
+                                {key.provider?.toUpperCase()}
+                              </span>
+                            </div>
+                            
+                            {/* Status indicator */}
+                            {isChecking ? (
+                              <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
+                            ) : isValid ? (
+                              <Check className="w-4 h-4 text-emerald-400" />
+                            ) : isQuota ? (
+                              <AlertTriangle className="w-4 h-4 text-amber-400" />
+                            ) : isError ? (
+                              <X className="w-4 h-4 text-red-400" />
+                            ) : null}
+                          </div>
+                          
+                          <p className="text-xs text-[#6b6b70] mb-2">{key.keyPreview}</p>
+                          
+                          {/* Status message */}
+                          {checkResult && !isChecking && (
+                            <div className="mb-3">
+                              {isValid && checkResult.models.length > 0 && (
+                                <div className="text-xs text-emerald-400">
+                                  Доступные модели: {checkResult.models.slice(0, 3).join(', ')}
+                                  {checkResult.models.length > 3 && ` +${checkResult.models.length - 3}`}
+                                </div>
+                              )}
+                              {isValid && checkResult.models.length === 0 && (
+                                <div className="text-xs text-emerald-400">✓ Ключ работает</div>
+                              )}
+                              {(isQuota || isError) && checkResult.error && (
+                                <div className="text-xs text-red-400">{checkResult.error}</div>
+                              )}
+                            </div>
+                          )}
+                          
+                          {/* Use button for valid keys */}
+                          {isValid && (
+                            <button
+                              onClick={() => applyKeyAndRetry(key.id, checkResult.models[0])}
+                              className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg transition-colors"
+                            >
+                              Использовать этот ключ
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              
+              {/* Footer */}
+              <div className="flex items-center justify-between p-4 border-t border-[#1f1f23] bg-[#0a0a0b]">
+                <button
+                  onClick={checkAllApiKeys}
+                  disabled={isCheckingKeys}
+                  className="flex items-center gap-2 px-4 py-2 bg-[#1f1f23] hover:bg-[#2a2a2e] text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {isCheckingKeys ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Search className="w-4 h-4" />
+                  )}
+                  {isCheckingKeys ? 'Проверка...' : 'Проверить снова'}
+                </button>
+                
+                <a
+                  href="/dashboard?tab=settings"
+                  className="flex items-center gap-2 text-sm text-emerald-400 hover:text-emerald-300 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  Добавить ключ
+                </a>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       
       {/* Terminal Component */}
       <TerminalComponent 

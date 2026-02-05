@@ -26,6 +26,13 @@ export interface DevToolsData {
   refreshData: () => Promise<void>;
 }
 
+// Get current project ID from URL
+function getCurrentProjectId(): string | null {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  return params.get('project');
+}
+
 export function useDevToolsData(): DevToolsData {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [history, setHistory] = useState<GenerationHistoryEntry[]>([]);
@@ -54,6 +61,8 @@ export function useDevToolsData(): DevToolsData {
     try {
       setIsLoading(true);
       
+      const projectId = getCurrentProjectId();
+      
       // Fetch subscription and usage in parallel
       const [subscription, usage, historyData] = await Promise.all([
         getUserSubscription(),
@@ -72,7 +81,21 @@ export function useDevToolsData(): DevToolsData {
         plan: plan.name,
       });
 
-      setHistory(historyData);
+      // For new projects, show empty history
+      // Otherwise filter history to only show items from today (current session)
+      if (projectId === 'new' || !projectId) {
+        // New project - start with empty history
+        setHistory([]);
+      } else {
+        // Existing project - show only today's history as approximation
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const filteredHistory = historyData.filter(entry => {
+          const entryDate = new Date(entry.timestamp);
+          return entryDate >= today;
+        });
+        setHistory(filteredHistory);
+      }
     } catch (error) {
       console.error('Error fetching DevTools data:', error);
       addLog('error', 'Failed to load user data', String(error));
