@@ -52,6 +52,7 @@ interface AIPromptPanelProps {
   elementSelectionText?: string; // Text describing selected elements from Preview
   onClearElementSelection?: () => void; // Clear selected elements
   onFileClick?: (filePath: string) => void; // Navigate to file in editor
+  onOpenDiff?: (filePath: string, original: string, modified: string) => void; // Open diff view
 }
 
 interface AIStatus {
@@ -133,7 +134,7 @@ function saveSelectedKey(keyId: string | null) {
   }
 }
 
-export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGeneration, elementSelectionText, onClearElementSelection, onFileClick }: AIPromptPanelProps) {
+export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGeneration, elementSelectionText, onClearElementSelection, onFileClick, onOpenDiff }: AIPromptPanelProps) {
   // Model and API key are now stored in localStorage (set by dashboard/IDELayout)
   const [prompt, setPrompt] = useState('');
   const [selectedModel, setSelectedModel] = useState<AIModel>(getDefaultModel());

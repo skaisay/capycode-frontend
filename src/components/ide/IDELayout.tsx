@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { FileTree } from './FileTree';
 import { CodeEditor } from './CodeEditor';
+import { DiffEditor } from './DiffEditor';
 import { Preview } from './Preview';
 import { AIPromptPanel } from './AIPromptPanel';
 import { BuildPanel } from './BuildPanel';
@@ -95,6 +96,14 @@ export function IDELayout() {
   const [showShareSubmit, setShowShareSubmit] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  
+  // Diff view state - shows differences between old and new file content
+  const [diffState, setDiffState] = useState<{
+    isOpen: boolean;
+    filePath: string;
+    originalContent: string;
+    modifiedContent: string;
+  } | null>(null);
   
   const { 
     project, 
@@ -210,6 +219,37 @@ export function IDELayout() {
     }
   }, [project, setCurrentFile]);
 
+  // Open diff view to compare old and new content
+  const openDiffView = useCallback((filePath: string, originalContent: string, modifiedContent: string) => {
+    setDiffState({
+      isOpen: true,
+      filePath,
+      originalContent,
+      modifiedContent
+    });
+    setActiveView('code');
+  }, []);
+
+  // Accept diff changes - update file content
+  const handleDiffAccept = useCallback((content: string) => {
+    if (diffState) {
+      updateFileContent(diffState.filePath, content);
+      setDiffState(null);
+      toast.success('Изменения приняты');
+    }
+  }, [diffState, updateFileContent]);
+
+  // Reject diff changes
+  const handleDiffReject = useCallback(() => {
+    setDiffState(null);
+    toast('Изменения отклонены');
+  }, []);
+
+  // Close diff view
+  const handleDiffClose = useCallback(() => {
+    setDiffState(null);
+  }, []);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -250,6 +290,7 @@ export function IDELayout() {
                   clearSelectedElements();
                 }}
                 onFileClick={handleFileClick}
+                onOpenDiff={openDiffView}
               />
             </div>
           </div>
@@ -452,10 +493,22 @@ export function IDELayout() {
                     />
                   )}
                   {activeView === 'code' && (
-                    <CodeEditor 
-                      file={currentFile}
-                      onChange={updateFileContent}
-                    />
+                    diffState?.isOpen ? (
+                      <DiffEditor
+                        originalContent={diffState.originalContent}
+                        modifiedContent={diffState.modifiedContent}
+                        fileName={diffState.filePath}
+                        language={diffState.filePath.endsWith('.tsx') || diffState.filePath.endsWith('.ts') ? 'typescript' : 'javascript'}
+                        onAccept={handleDiffAccept}
+                        onReject={handleDiffReject}
+                        onClose={handleDiffClose}
+                      />
+                    ) : (
+                      <CodeEditor 
+                        file={currentFile}
+                        onChange={updateFileContent}
+                      />
+                    )
                   )}
                   {activeView === 'build' && (
                     <BuildPanel project={project} />

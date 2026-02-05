@@ -71,34 +71,39 @@ export function Preview({ project, isGenerating, onElementSelected }: PreviewPro
   
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Listen for messages from iframe (element selection)
+  // Listen for messages from iframe (element selection) - with error protection
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (!isSelecting) return;
-      
-      if (event.data.type === 'ELEMENT_HOVER') {
-        const { element } = event.data;
-        if (element) {
-          setHoveredElement({
-            id: element.id || `el-${Date.now()}`,
-            type: element.tagName?.toLowerCase() || 'element',
-            displayName: element.displayName || element.tagName || 'Element',
-            path: element.path || '',
-          });
+      try {
+        if (!isSelecting) return;
+        if (!event.data || typeof event.data !== 'object') return;
+        
+        if (event.data.type === 'ELEMENT_HOVER') {
+          const { element } = event.data;
+          if (element) {
+            setHoveredElement({
+              id: element.id || `el-${Date.now()}`,
+              type: element.tagName?.toLowerCase() || 'element',
+              displayName: element.displayName || element.tagName || 'Element',
+              path: element.path || '',
+            });
+          }
+        } else if (event.data.type === 'ELEMENT_LEAVE') {
+          setHoveredElement(null);
+        } else if (event.data.type === 'ELEMENT_CLICK') {
+          const { element } = event.data;
+          if (element) {
+            addSelectedElement({
+              id: element.id || `el-${Date.now()}`,
+              type: element.tagName?.toLowerCase() || 'element',
+              displayName: element.displayName || element.tagName || 'Element',
+              path: element.path || '',
+              preview: element.preview,
+            });
+          }
         }
-      } else if (event.data.type === 'ELEMENT_LEAVE') {
-        setHoveredElement(null);
-      } else if (event.data.type === 'ELEMENT_CLICK') {
-        const { element } = event.data;
-        if (element) {
-          addSelectedElement({
-            id: element.id || `el-${Date.now()}`,
-            type: element.tagName?.toLowerCase() || 'element',
-            displayName: element.displayName || element.tagName || 'Element',
-            path: element.path || '',
-            preview: element.preview,
-          });
-        }
+      } catch (err) {
+        console.warn('[Preview] Element selection message error:', err);
       }
     };
     
@@ -106,14 +111,18 @@ export function Preview({ project, isGenerating, onElementSelected }: PreviewPro
     return () => window.removeEventListener('message', handleMessage);
   }, [isSelecting, setHoveredElement, addSelectedElement]);
 
-  // Send selection mode state to iframe
+  // Send selection mode state to iframe - with error protection
   useEffect(() => {
-    const iframe = iframeRef.current;
-    if (iframe?.contentWindow) {
-      iframe.contentWindow.postMessage({ 
-        type: 'SET_SELECTION_MODE', 
-        enabled: isSelecting 
-      }, '*');
+    try {
+      const iframe = iframeRef.current;
+      if (iframe?.contentWindow) {
+        iframe.contentWindow.postMessage({ 
+          type: 'SET_SELECTION_MODE', 
+          enabled: isSelecting 
+        }, '*');
+      }
+    } catch (err) {
+      console.warn('[Preview] Failed to send selection mode to iframe:', err);
     }
   }, [isSelecting, refreshKey]);
 
@@ -1092,96 +1101,114 @@ function generatePreviewHTML(code: string, appName: string, files?: Array<{ path
       return path.join(' > ');
     }
     
-    // Handle mouse events
+    // Handle mouse events - with error protection
     document.addEventListener('mouseover', function(e) {
-      if (!selectionMode) return;
-      
-      const target = e.target;
-      if (target === document.body || target.classList.contains('app-container')) return;
-      
-      if (highlightedElement) {
-        highlightedElement.classList.remove('element-highlight');
-      }
-      
-      target.classList.add('element-highlight');
-      highlightedElement = target;
-      
-      // Send hover info to parent
-      const rect = target.getBoundingClientRect();
-      window.parent.postMessage({
-        type: 'ELEMENT_HOVER',
-        element: {
-          id: target.id || 'el-' + Date.now(),
-          tagName: target.tagName,
-          displayName: getElementName(target),
-          path: getCSSPath(target),
-          className: target.className.replace('element-highlight', '').trim()
-        },
-        bounds: {
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height
+      try {
+        if (!selectionMode) return;
+        
+        const target = e.target;
+        if (!target || target === document.body || target.classList.contains('app-container')) return;
+        
+        if (highlightedElement && highlightedElement.classList) {
+          highlightedElement.classList.remove('element-highlight');
         }
-      }, '*');
+        
+        if (target.classList) {
+          target.classList.add('element-highlight');
+        }
+        highlightedElement = target;
+        
+        // Send hover info to parent
+        const rect = target.getBoundingClientRect();
+        window.parent.postMessage({
+          type: 'ELEMENT_HOVER',
+          element: {
+            id: target.id || 'el-' + Date.now(),
+            tagName: target.tagName,
+            displayName: getElementName(target),
+            path: getCSSPath(target),
+            className: (target.className || '').toString().replace('element-highlight', '').trim()
+          },
+          bounds: {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height
+          }
+        }, '*');
+      } catch (err) {
+        console.warn('[Preview] Hover error:', err);
+      }
     });
     
     document.addEventListener('mouseout', function(e) {
-      if (!selectionMode) return;
-      
-      const target = e.target;
-      if (!e.relatedTarget || !document.body.contains(e.relatedTarget)) {
-        if (highlightedElement) {
-          highlightedElement.classList.remove('element-highlight');
-          highlightedElement = null;
+      try {
+        if (!selectionMode) return;
+        
+        const target = e.target;
+        if (!e.relatedTarget || !document.body.contains(e.relatedTarget)) {
+          if (highlightedElement && highlightedElement.classList) {
+            highlightedElement.classList.remove('element-highlight');
+            highlightedElement = null;
+          }
+          window.parent.postMessage({ type: 'ELEMENT_LEAVE' }, '*');
         }
-        window.parent.postMessage({ type: 'ELEMENT_LEAVE' }, '*');
+      } catch (err) {
+        console.warn('[Preview] Mouseout error:', err);
       }
     });
     
     document.addEventListener('click', function(e) {
-      if (!selectionMode) return;
-      
-      e.preventDefault();
-      e.stopPropagation();
-      
-      const target = e.target;
-      if (target === document.body) return;
-      
-      const rect = target.getBoundingClientRect();
-      window.parent.postMessage({
-        type: 'ELEMENT_CLICK',
-        element: {
-          id: target.id || 'el-' + Date.now(),
-          tagName: target.tagName,
-          displayName: getElementName(target),
-          path: getCSSPath(target),
-          className: target.className.replace('element-highlight', '').trim(),
-          preview: target.outerHTML.substring(0, 200)
-        },
-        bounds: {
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height
-        }
-      }, '*');
+      try {
+        if (!selectionMode) return;
+        
+        e.preventDefault();
+        e.stopPropagation();
+        
+        const target = e.target;
+        if (!target || target === document.body) return;
+        
+        const rect = target.getBoundingClientRect();
+        window.parent.postMessage({
+          type: 'ELEMENT_CLICK',
+          element: {
+            id: target.id || 'el-' + Date.now(),
+            tagName: target.tagName,
+            displayName: getElementName(target),
+            path: getCSSPath(target),
+            className: (target.className || '').toString().replace('element-highlight', '').trim(),
+            preview: (target.outerHTML || '').substring(0, 200)
+          },
+          bounds: {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height
+          }
+        }, '*');
+      } catch (err) {
+        console.warn('[Preview] Click error:', err);
+      }
     }, true);
     
-    // Listen for messages from parent
+    // Listen for messages from parent - with error protection
     window.addEventListener('message', function(e) {
-      if (e.data.type === 'SET_SELECTION_MODE') {
-        selectionMode = e.data.enabled;
-        
-        if (selectionMode) {
-          document.body.classList.add('selection-mode');
-        } else {
-          document.body.classList.remove('selection-mode');
-          if (highlightedElement) {
-            highlightedElement.classList.remove('element-highlight');
-            highlightedElement = null;
+      try {
+        if (e.data && e.data.type === 'SET_SELECTION_MODE') {
+          selectionMode = !!e.data.enabled;
+          
+          if (selectionMode) {
+            document.body.classList.add('selection-mode');
+          } else {
+            document.body.classList.remove('selection-mode');
+            if (highlightedElement && highlightedElement.classList) {
+              highlightedElement.classList.remove('element-highlight');
+              highlightedElement = null;
+            }
           }
         }
+      } catch (err) {
+        console.warn('[Preview] Message handler error:', err);
       }
     });
   </script>
