@@ -143,6 +143,20 @@ function selectOptimalModel(prompt: string, requestedModel?: AIModel): AIModel {
   return 'gemini-2.5-flash';
 }
 
+// Determine which provider is needed for a given model
+function getRequiredProviderForModel(model: AIModel): 'google' | 'openai' | 'anthropic' {
+  if (model.startsWith('gemini')) return 'google';
+  if (model.startsWith('gpt')) return 'openai';
+  if (model.startsWith('claude')) return 'anthropic';
+  return 'google'; // Default
+}
+
+// Check if a provider's key is compatible with the requested model
+function isProviderCompatible(provider: string, model: AIModel): boolean {
+  const requiredProvider = getRequiredProviderForModel(model);
+  return provider === requiredProvider;
+}
+
 // Try to generate with a specific key and provider
 async function tryGenerateWithKey(
   prompt: string,
@@ -281,47 +295,72 @@ export async function POST(request: NextRequest) {
     if (userApiKey) {
       // Auto-detect provider from key format (override database value if mismatch)
       const detectedProvider = detectProviderFromKey(userApiKey);
+      const requiredProvider = getRequiredProviderForModel(model);
       
-      console.log(`[Generate] User key detected, provider: ${detectedProvider}, key starts with: ${userApiKey.substring(0, 8)}...`);
+      console.log(`[Generate] User key detected, provider: ${detectedProvider}, model: ${model}, required: ${requiredProvider}`);
       console.log(`[Generate] Prompt: "${prompt.substring(0, 100)}..."`);
       
-      const startTime = Date.now();
-      const result = await tryGenerateWithKey(prompt, userApiKey, detectedProvider, model);
-      
-      if (result.success) {
-        const duration = Date.now() - startTime;
-        console.log(`[Generate] Success! Duration: ${duration}ms, Files: ${result.result.files?.length}, ExpoName: ${result.result.expoConfig?.name}`);
+      // Check if key is compatible with model
+      if (!isProviderCompatible(detectedProvider, model)) {
+        const errorMsg = `Ключ ${detectedProvider.toUpperCase()} несовместим с моделью ${model}. Нужен ключ ${requiredProvider.toUpperCase()}.`;
+        console.log(`[Generate] Incompatible key: ${errorMsg}`);
+        errors.push(errorMsg);
+        // Don't try this key, fall through to auto-select or error
+      } else {
+        const startTime = Date.now();
+        const result = await tryGenerateWithKey(prompt, userApiKey, detectedProvider, model);
         
-        return NextResponse.json({
-          ...result.result,
-          usedKey: { provider: detectedProvider }
-        }, {
-          headers: {
-            'X-RateLimit-Remaining': String(rateLimitResult.remaining),
-            'X-RateLimit-Reset': String(rateLimitResult.resetTime),
-          },
-        });
-      }
-      
-      errors.push(`User key (${detectedProvider}): ${result.error}`);
+        if (result.success) {
+          const duration = Date.now() - startTime;
+          console.log(`[Generate] Success! Duration: ${duration}ms, Files: ${result.result.files?.length}, ExpoName: ${result.result.expoConfig?.name}`);
+          
+          return NextResponse.json({
+            ...result.result,
+            usedKey: { provider: detectedProvider }
+          }, {
+            headers: {
+              'X-RateLimit-Remaining': String(rateLimitResult.remaining),
+              'X-RateLimit-Reset': String(rateLimitResult.resetTime),
+            },
+          });
+        }
+        
+        errors.push(`User key (${detectedProvider}): ${result.error}`);
+        console.log(`[Generate] User key failed: ${result.error}`);
       console.log(`[Generate] User key failed: ${result.error}`);
       
-      // If not retryable (network error, parse error), throw immediately
-      if (!result.isRetryable) {
-        throw new Error(result.error);
+        // If not retryable (network error, parse error), throw immediately
+        if (!result.isRetryable) {
+          throw new Error(result.error);
+        }
+        
+        // Otherwise continue to try other keys
       }
-      
-      // Otherwise continue to try other keys
     }
 
     // AUTO-KEY SELECTION: Try all user's API keys until one works
+    // ONLY try keys that are compatible with the selected model
+    const requiredProvider = getRequiredProviderForModel(model);
+    
     if (autoSelectKey && userId) {
-      console.log('[Generate] Auto-selecting from user API keys...');
+      console.log(`[Generate] Auto-selecting from user API keys for ${model} (requires ${requiredProvider})...`);
       const userKeys = await getUserApiKeys(userId);
       console.log(`[Generate] Found ${userKeys.length} user API keys`);
       
-      for (const key of userKeys) {
+      // Filter to only compatible keys first
+      const compatibleKeys = userKeys.filter(key => {
         const provider = detectProviderFromKey(key.key);
+        return isProviderCompatible(provider, model);
+      });
+      
+      console.log(`[Generate] ${compatibleKeys.length} keys are compatible with ${requiredProvider}`);
+      
+      if (compatibleKeys.length === 0) {
+        errors.push(`Нет совместимых ключей для модели ${model}. Нужен ключ ${requiredProvider.toUpperCase()}.`);
+      }
+      
+      for (const key of compatibleKeys) {
+        const provider = detectProviderFromKey(key.key) as 'google' | 'openai' | 'anthropic';
         console.log(`[Generate] Trying key "${key.name}" (${provider})...`);
         
         const result = await tryGenerateWithKey(prompt, key.key, provider, model);
@@ -352,51 +391,36 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Fallback: Use server-side key (Gemini only)
-    const serverKey = process.env.GEMINI_API_KEY;
-    
-    if (serverKey) {
-      console.log(`[Generate] Trying server API key (${serverKey.substring(0, 8)}...), model: ${model}`);
-      
-      const result = await tryGenerateWithKey(prompt, serverKey, 'google', model);
-      
-      if (result.success) {
-        console.log('[Generate] Success with server key!');
-        
-        return NextResponse.json({
-          ...result.result,
-          usedKey: { provider: 'google', name: 'Server (Gemini)' }
-        }, {
-          headers: {
-            'X-RateLimit-Remaining': String(rateLimitResult.remaining),
-            'X-RateLimit-Reset': String(rateLimitResult.resetTime),
-          },
-        });
-      }
-      
-      errors.push(`Server key (google): ${result.error}`);
-      console.log(`[Generate] Server key failed: ${result.error}`);
-    } else {
-      console.error('[Generate] GEMINI_API_KEY not configured');
-      errors.push('Server key not configured');
-    }
+    // NO FALLBACK TO SERVER KEY - User must have valid API keys
+    // This ensures no demo/default data is ever shown
 
-    // All keys failed
+    // All keys failed - return detailed error
     console.error('[Generate] All API keys failed:', errors);
     
-    // Return the most relevant error
-    const lastError = errors[errors.length - 1] || 'No API keys available';
-    const isQuotaError = errors.some(e => e.includes('quota') || e.includes('429'));
+    // Build helpful error message
+    const lastError = errors[errors.length - 1] || 'Нет доступных API ключей';
+    const isQuotaError = errors.some(e => e.includes('quota') || e.includes('429') || e.includes('exceeded'));
+    const isCompatibilityError = errors.some(e => e.includes('несовместим'));
+    
+    let errorMessage = '';
+    if (errors.length === 0) {
+      errorMessage = `**Нет API ключей**\n\nДля генерации приложений необходимо добавить API ключ.\n\n**Как добавить:**\n1. Перейдите в Настройки → API Ключи\n2. Добавьте ключ Google AI (для моделей Gemini)\n3. Или добавьте ключ OpenAI (для моделей GPT)\n\n**Получить ключ:**\n- Google AI: https://aistudio.google.com/app/apikey\n- OpenAI: https://platform.openai.com/api-keys`;
+    } else if (isCompatibilityError) {
+      errorMessage = `**Несовместимый API ключ**\n\nВыбранный ключ не подходит для модели ${model}.\n\n**Решение:**\n- Для моделей Gemini нужен ключ Google AI\n- Для моделей GPT нужен ключ OpenAI\n- Для моделей Claude нужен ключ Anthropic\n\n**Добавьте нужный ключ в Настройках.**`;
+    } else if (isQuotaError) {
+      errorMessage = `**Лимит API исчерпан**\n\nВсе ваши API ключи достигли лимита.\n\n**Возможные решения:**\n1. Подождите несколько минут и попробуйте снова\n2. Добавьте другой API ключ\n3. Проверьте баланс на сайте провайдера\n\n**Ошибки:**\n${errors.map(e => `• ${e}`).join('\n')}`;
+    } else {
+      errorMessage = `**Ошибка генерации**\n\nНе удалось сгенерировать приложение.\n\n**Детали:**\n${errors.map(e => `• ${e}`).join('\n')}\n\n**Что можно сделать:**\n1. Проверьте правильность API ключа\n2. Убедитесь, что ключ активен\n3. Попробуйте другой ключ`;
+    }
     
     return NextResponse.json(
       { 
-        error: isQuotaError 
-          ? 'All API keys have exceeded their quota. Please add more keys or try again later.'
-          : `AI generation failed: ${lastError}`,
+        error: errorMessage,
         errors,
         isQuotaError,
+        noKeys: errors.length === 0,
       },
-      { status: isQuotaError ? 503 : 500 }
+      { status: errors.length === 0 ? 400 : (isQuotaError ? 503 : 500) }
     );
   } catch (error: any) {
     console.error('AI generation error:', error);
