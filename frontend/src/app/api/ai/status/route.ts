@@ -15,11 +15,18 @@ export async function GET(request: NextRequest) {
 
   const apiKey = process.env.GEMINI_API_KEY;
   
+  // Even without server key, users can use their own keys
+  // So we report as "available" if API infrastructure is up
   if (!apiKey) {
     return NextResponse.json({
-      connected: false,
-      model: null,
-      error: 'API key not configured',
+      connected: true, // Changed: users can still use their own keys
+      model: 'gemini-2.5-flash',
+      provider: 'Google AI (User Keys)',
+      message: 'Using user-provided API keys',
+      limits: {
+        requestsPerMinute: 15,
+        requestsPerDay: 1500,
+      },
     });
   }
 
@@ -40,7 +47,7 @@ export async function GET(request: NextRequest) {
     if (response.ok) {
       return NextResponse.json({
         connected: true,
-        model: 'gemini-2.0-flash',
+        model: 'gemini-2.5-flash',
         provider: 'Google AI',
         limits: {
           requestsPerMinute: 15,
@@ -54,18 +61,27 @@ export async function GET(request: NextRequest) {
                            errorMessage.includes('exceeded') ||
                            response.status === 429;
       
+      // Even if server key is exhausted, users can use their own keys
       return NextResponse.json({
-        connected: false,
-        model: null,
-        error: isQuotaError ? 'API quota exceeded. Please upgrade to a paid plan.' : errorMessage,
+        connected: true, // Changed: users can still use their own keys
+        model: 'gemini-2.5-flash',
+        provider: 'Google AI (User Keys)',
+        serverKeyStatus: isQuotaError ? 'quota_exceeded' : 'error',
+        message: isQuotaError ? 'Server quota exceeded. Use your own API key.' : 'Using user API keys',
         isQuotaError,
+        limits: {
+          requestsPerMinute: 15,
+          requestsPerDay: 1500,
+        },
       });
     }
   } catch (error: any) {
+    // Network errors still mean service might be available with user keys
     return NextResponse.json({
-      connected: false,
-      model: null,
-      error: error.message || 'Connection error',
+      connected: true, // Users can still use their own keys
+      model: 'gemini-2.5-flash',
+      provider: 'Google AI (User Keys)',
+      message: 'Use your own API key for best results',
     });
   }
 }

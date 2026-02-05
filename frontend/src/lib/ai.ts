@@ -95,10 +95,103 @@ Required files:
 - assets/icon.png placeholder reference
 - assets/splash.png placeholder reference`;
 
+// Escape special characters in string values for JSON
+function escapeJsonString(str: string): string {
+  return str
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t');
+}
+
+// Attempt to fix common JSON errors
+function attemptJsonFix(jsonStr: string): string {
+  let fixed = jsonStr;
+  
+  // Fix unescaped newlines in string values
+  // This is a common issue when AI returns code with newlines
+  fixed = fixed.replace(/"content"\s*:\s*"([^"]*)"/g, (match, content) => {
+    // Escape any unescaped newlines
+    const escapedContent = content
+      .replace(/(?<!\\)\n/g, '\\n')
+      .replace(/(?<!\\)\r/g, '\\r')
+      .replace(/(?<!\\)\t/g, '\\t');
+    return `"content": "${escapedContent}"`;
+  });
+  
+  // Fix trailing commas before closing brackets
+  fixed = fixed.replace(/,(\s*[}\]])/g, '$1');
+  
+  // Fix missing commas between properties (common AI error)
+  fixed = fixed.replace(/}(\s*){/g, '}, {');
+  fixed = fixed.replace(/"(\s*)"(\w+)":/g, '", "$2":');
+  
+  return fixed;
+}
+
+// Extract balanced JSON object from text
+function extractBalancedJson(text: string): string | null {
+  const startIdx = text.indexOf('{');
+  if (startIdx === -1) return null;
+  
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let endIdx = -1;
+  
+  for (let i = startIdx; i < text.length; i++) {
+    const char = text[i];
+    
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      escape = true;
+      continue;
+    }
+    
+    if (char === '"' && !escape) {
+      inString = !inString;
+      continue;
+    }
+    
+    if (inString) continue;
+    
+    if (char === '{') depth++;
+    if (char === '}') {
+      depth--;
+      if (depth === 0) {
+        endIdx = i;
+        break;
+      }
+    }
+  }
+  
+  if (endIdx === -1) {
+    // Try to fix incomplete JSON by finding where it likely should end
+    // Look for the last complete file entry and close the structure
+    const lastFileEndMatch = text.lastIndexOf('"type"');
+    if (lastFileEndMatch !== -1) {
+      // Find the end of this entry and close the structure
+      let closePoint = text.indexOf('}', lastFileEndMatch);
+      if (closePoint !== -1) {
+        // Close the files array and main object
+        return text.substring(startIdx, closePoint + 1) + ']}';
+      }
+    }
+    return null;
+  }
+  
+  return text.substring(startIdx, endIdx + 1);
+}
+
 // Parse AI response to extract JSON
 function parseAIResponse(text: string): GenerationResult {
   console.log('[parseAIResponse] Input length:', text.length);
-  console.log('[parseAIResponse] First 200 chars:', text.substring(0, 200));
+  console.log('[parseAIResponse] First 500 chars:', text.substring(0, 500));
   
   // Try to find JSON in the response
   let jsonStr = text;
@@ -107,93 +200,153 @@ function parseAIResponse(text: string): GenerationResult {
   const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (jsonMatch) {
     jsonStr = jsonMatch[1];
+    console.log('[parseAIResponse] Extracted from code block, length:', jsonStr.length);
   }
   
-  // Try to find JSON object
-  const objectMatch = jsonStr.match(/\{[\s\S]*\}/);
-  if (objectMatch) {
-    jsonStr = objectMatch[0];
-  }
-  
-  try {
-    const parsed = JSON.parse(jsonStr);
-    
-    // Validate structure
-    if (!parsed.files || !Array.isArray(parsed.files)) {
-      throw new Error('Invalid response: missing files array');
+  // Try to extract balanced JSON object
+  const extracted = extractBalancedJson(jsonStr);
+  if (extracted) {
+    jsonStr = extracted;
+    console.log('[parseAIResponse] Extracted balanced JSON, length:', jsonStr.length);
+  } else {
+    // Fallback to regex
+    const objectMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (objectMatch) {
+      jsonStr = objectMatch[0];
+      console.log('[parseAIResponse] Found JSON via regex, length:', jsonStr.length);
+    } else {
+      console.log('[parseAIResponse] No JSON object found in response');
     }
-    
-    const files = parsed.files;
-    const expoConfig = parsed.expoConfig || { name: 'MyApp', slug: 'myapp' };
-    
-    // Ensure required EAS files exist
-    const hasEasJson = files.some((f: any) => f.path === 'eas.json');
-    if (!hasEasJson) {
-      files.push({
-        path: 'eas.json',
-        content: JSON.stringify({
-          cli: { version: '>= 7.0.0' },
-          build: {
-            development: {
-              developmentClient: true,
-              distribution: 'internal',
-              ios: { simulator: true }
-            },
-            preview: {
-              distribution: 'internal',
-              ios: { simulator: false }
-            },
-            production: {}
-          },
-          submit: {
-            production: {}
+  }
+  
+  // Try parsing, with multiple attempts
+  const attempts = [
+    () => JSON.parse(jsonStr),
+    () => JSON.parse(attemptJsonFix(jsonStr)),
+    () => {
+      // Last resort: try to extract just the files array
+      console.log('[parseAIResponse] Attempting partial recovery...');
+      const filesMatch = jsonStr.match(/"files"\s*:\s*\[([\s\S]*?)\]/);
+      if (filesMatch) {
+        // Try to parse each file object individually
+        const filesStr = filesMatch[1];
+        const files: any[] = [];
+        const fileMatches = filesStr.match(/\{[^{}]*"path"[^{}]*"content"[^{}]*"type"[^{}]*\}/g);
+        if (fileMatches) {
+          for (const fileStr of fileMatches) {
+            try {
+              files.push(JSON.parse(attemptJsonFix(fileStr)));
+            } catch {
+              // Skip malformed files
+            }
           }
-        }, null, 2),
-        type: 'json'
-      });
+        }
+        if (files.length > 0) {
+          return { files, dependencies: {}, devDependencies: {}, expoConfig: { name: 'MyApp', slug: 'myapp' } };
+        }
+      }
+      throw new Error('Could not recover files from response');
     }
-    
-    // Ensure metro.config.js exists
-    const hasMetroConfig = files.some((f: any) => f.path === 'metro.config.js');
-    if (!hasMetroConfig) {
-      files.push({
-        path: 'metro.config.js',
-        content: `const { getDefaultConfig } = require('expo/metro-config');
+  ];
+  
+  let parsed: any = null;
+  let lastError: any = null;
+  
+  for (let i = 0; i < attempts.length; i++) {
+    try {
+      parsed = attempts[i]();
+      console.log(`[parseAIResponse] Parse attempt ${i + 1} succeeded`);
+      break;
+    } catch (e) {
+      lastError = e;
+      console.log(`[parseAIResponse] Parse attempt ${i + 1} failed:`, (e as Error).message);
+    }
+  }
+  
+  if (!parsed) {
+    console.error('[parseAIResponse] All parse attempts failed');
+    console.error('[parseAIResponse] Last 500 chars:', jsonStr.substring(jsonStr.length - 500));
+    throw new Error(`Failed to parse AI response: ${lastError?.message}. The AI returned malformed JSON. Please try again.`);
+  }
+  
+  // Validate structure
+  if (!parsed.files || !Array.isArray(parsed.files)) {
+    throw new Error('Invalid response: missing files array');
+  }
+  
+  if (parsed.files.length === 0) {
+    throw new Error('Invalid response: no files generated');
+  }
+  
+  const files = parsed.files;
+  const expoConfig = parsed.expoConfig || { name: 'MyApp', slug: 'myapp' };
+  
+  // Ensure required EAS files exist
+  const hasEasJson = files.some((f: any) => f.path === 'eas.json');
+  if (!hasEasJson) {
+    files.push({
+      path: 'eas.json',
+      content: JSON.stringify({
+        cli: { version: '>= 7.0.0' },
+        build: {
+          development: {
+            developmentClient: true,
+            distribution: 'internal',
+            ios: { simulator: true }
+          },
+          preview: {
+            distribution: 'internal',
+            ios: { simulator: false }
+          },
+          production: {}
+        },
+        submit: {
+          production: {}
+        }
+      }, null, 2),
+      type: 'json'
+    });
+  }
+  
+  // Ensure metro.config.js exists
+  const hasMetroConfig = files.some((f: any) => f.path === 'metro.config.js');
+  if (!hasMetroConfig) {
+    files.push({
+      path: 'metro.config.js',
+      content: `const { getDefaultConfig } = require('expo/metro-config');
 
 const config = getDefaultConfig(__dirname);
 
 module.exports = config;
 `,
-        type: 'javascript'
-      });
-    }
-    
-    // Ensure babel.config.js exists
-    const hasBabelConfig = files.some((f: any) => f.path === 'babel.config.js');
-    if (!hasBabelConfig) {
-      files.push({
-        path: 'babel.config.js',
-        content: `module.exports = function(api) {
+      type: 'javascript'
+    });
+  }
+  
+  // Ensure babel.config.js exists
+  const hasBabelConfig = files.some((f: any) => f.path === 'babel.config.js');
+  if (!hasBabelConfig) {
+    files.push({
+      path: 'babel.config.js',
+      content: `module.exports = function(api) {
   api.cache(true);
   return {
     presets: ['babel-preset-expo'],
   };
 };
 `,
-        type: 'javascript'
-      });
-    }
-    
-    return {
-      files,
-      dependencies: parsed.dependencies || {},
-      devDependencies: parsed.devDependencies || {},
-      expoConfig,
-    };
-  } catch (e) {
-    console.error('Failed to parse AI response:', e);
-    throw new Error('Failed to parse AI response. Please try again.');
+      type: 'javascript'
+    });
   }
+  
+  console.log(`[parseAIResponse] Success! Files: ${files.length}, ExpoConfig: ${expoConfig.name}`);
+  
+  return {
+    files,
+    dependencies: parsed.dependencies || {},
+    devDependencies: parsed.devDependencies || {},
+    expoConfig,
+  };
 }
 
 // Generate with Google Gemini API

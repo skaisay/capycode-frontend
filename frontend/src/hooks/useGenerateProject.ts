@@ -13,6 +13,8 @@ interface UseGenerateProjectOptions {
   model?: AIModel;
   apiKey?: string; // User's own API key
   apiKeyProvider?: 'google' | 'openai' | 'anthropic' | 'custom'; // Provider of user's API key
+  autoSelectKey?: boolean; // Whether to auto-select working key
+  userId?: string; // User ID for auto-key selection
 }
 
 interface GenerationProgress {
@@ -378,7 +380,7 @@ const simulateGeneration = async (
 
 export function useGenerateProject(options: UseGenerateProjectOptions = {}) {
   const { streaming = false, onSuccess, onError, demoMode = false, model = 'gemini-2.5-flash' } = options;
-  const { setProject, setLoading } = useProjectStore();
+  const { setProject, addFile, setLoading, reset: resetProjectStore, project } = useProjectStore();
   
   const [progress, setProgress] = useState<GenerationProgress>({
     stage: 'analyzing',
@@ -389,34 +391,75 @@ export function useGenerateProject(options: UseGenerateProjectOptions = {}) {
   const [currentModel, setCurrentModel] = useState<AIModel>(model);
 
   // Function to generate with real AI API
-  const generateWithAI = async (prompt: string, selectedModel: AIModel, userApiKey?: string, provider?: string): Promise<GenerateResult> => {
+  const generateWithAI = async (prompt: string, selectedModel: AIModel, userApiKey?: string, provider?: string, autoSelectKey?: boolean, userId?: string, isEdit?: boolean): Promise<GenerateResult> => {
+    // Get current project for edit mode
+    const currentProject = useProjectStore.getState().project;
+    const existingFiles = isEdit && currentProject?.files ? currentProject.files : [];
+    
     setProgress({
       stage: 'analyzing',
-      message: 'Analyzing your requirements...',
+      message: isEdit ? 'Analyzing existing project...' : 'Analyzing your requirements...',
       progress: 10,
     });
     
     await new Promise(r => setTimeout(r, 500));
     
+    // If editing, show what files we're reviewing
+    if (isEdit && existingFiles.length > 0) {
+      setProgress({
+        stage: 'analyzing',
+        message: `Reviewing ${existingFiles.length} existing files...`,
+        progress: 15,
+      });
+      await new Promise(r => setTimeout(r, 500));
+    }
+    
     setProgress({
       stage: 'analyzing',
-      message: 'Connecting to AI...',
+      message: autoSelectKey ? 'Finding the best API key...' : 'Connecting to AI...',
       progress: 20,
     });
     
+    // Build context with existing files for edit mode
+    let contextPrompt = prompt;
+    if (isEdit && existingFiles.length > 0) {
+      const filesSummary = existingFiles.map(f => `- ${f.path}`).join('\n');
+      const mainFiles = existingFiles
+        .filter(f => f.path.includes('App.tsx') || f.path.includes('index.tsx') || f.path.includes('screens/'))
+        .slice(0, 3)
+        .map(f => `\n--- ${f.path} ---\n${f.content.substring(0, 1000)}${f.content.length > 1000 ? '...' : ''}`);
+      
+      contextPrompt = `EXISTING PROJECT CONTEXT:
+Files in project:
+${filesSummary}
+
+Key file contents:
+${mainFiles.join('\n')}
+
+USER REQUEST: ${prompt}
+
+Please modify the existing project based on the user's request. Keep existing functionality and only change what's needed.`;
+    }
+    
     // Call our API route
     const requestBody = { 
-      prompt, 
+      prompt: contextPrompt, 
       model: selectedModel,
       apiKey: userApiKey, // Pass user's API key if provided
       provider: provider, // Provider of the API key (google, openai, anthropic)
+      autoSelectKey: autoSelectKey || false,
+      userId: userId,
     };
     
     console.log('[useGenerateProject] Calling /api/generate with:', {
       prompt: prompt.substring(0, 50) + '...',
       model: selectedModel,
       hasApiKey: !!userApiKey,
-      provider: provider
+      provider: provider,
+      autoSelectKey: autoSelectKey,
+      hasUserId: !!userId,
+      isEdit: isEdit,
+      existingFilesCount: existingFiles.length,
     });
     
     const response = await fetch('/api/generate', {
@@ -445,20 +488,58 @@ export function useGenerateProject(options: UseGenerateProjectOptions = {}) {
       filesCount: result.files?.length,
       hasExpoConfig: !!result.expoConfig,
       firstFile: result.files?.[0]?.path,
-      expoName: result.expoConfig?.name
+      expoName: result.expoConfig?.name,
+      isEdit: isEdit
     });
     
-    // Stream files one by one for visual effect
+    // Create initial project structure only if not editing
+    const projectName = typeof result.expoConfig?.name === 'string' 
+      ? result.expoConfig.name 
+      : currentProject?.name || 'New Project';
+    const projectSlug = typeof result.expoConfig?.slug === 'string'
+      ? result.expoConfig.slug
+      : currentProject?.slug || 'new-project';
+    
+    // Only create new project if not editing
+    if (!isEdit) {
+      setProject({
+        id: crypto.randomUUID(),
+        name: projectName,
+        slug: projectSlug,
+        description: '',
+        files: [], // Start empty, files will be added progressively
+        expo_config: result.expoConfig || {},
+        dependencies: result.dependencies || {},
+        dev_dependencies: result.devDependencies || {},
+        status: 'generating',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    }
+    
+    // Stream files one by one for visual effect AND add/update to project store
     for (let i = 0; i < result.files.length; i++) {
       const file = result.files[i];
       setProgress({
         stage: 'generating',
-        message: `Creating ${file.path}...`,
+        message: isEdit ? `Updating ${file.path}...` : `Creating ${file.path}...`,
         progress: 50 + ((i + 1) / result.files.length) * 40,
         currentFile: file.path,
       });
       setStreamedFiles(prev => [...prev, file]);
-      await new Promise(r => setTimeout(r, 200));
+      
+      // Check if file exists in current project (for edit mode)
+      const existingFile = currentProject?.files?.find(f => f.path === file.path);
+      if (existingFile) {
+        // Update existing file
+        useProjectStore.getState().updateFileContent(file.path, file.content);
+      } else {
+        // Add new file
+        addFile(file);
+      }
+      
+      // Delay between files for visual feedback (longer for better UX)
+      await new Promise(r => setTimeout(r, 300));
     }
     
     setProgress({
@@ -471,7 +552,7 @@ export function useGenerateProject(options: UseGenerateProjectOptions = {}) {
     
     setProgress({
       stage: 'complete',
-      message: 'Your app is ready!',
+      message: isEdit ? 'Project updated!' : 'Your app is ready!',
       progress: 100,
     });
     
@@ -479,7 +560,7 @@ export function useGenerateProject(options: UseGenerateProjectOptions = {}) {
   };
 
   const mutation = useMutation({
-    mutationFn: async (promptOrConfig: string | { prompt: string; model: AIModel; name?: string; description?: string; apiKey?: string; provider?: string }) => {
+    mutationFn: async (promptOrConfig: string | { prompt: string; model: AIModel; name?: string; description?: string; apiKey?: string; provider?: string; autoSelectKey?: boolean; userId?: string; isEdit?: boolean }) => {
       setLoading(true);
       setStreamedFiles([]);
       
@@ -487,6 +568,14 @@ export function useGenerateProject(options: UseGenerateProjectOptions = {}) {
       const selectedModel = typeof promptOrConfig === 'string' ? currentModel : promptOrConfig.model;
       const userApiKey = typeof promptOrConfig === 'string' ? undefined : promptOrConfig.apiKey;
       const provider = typeof promptOrConfig === 'string' ? undefined : promptOrConfig.provider;
+      const autoSelectKey = typeof promptOrConfig === 'string' ? false : promptOrConfig.autoSelectKey;
+      const userId = typeof promptOrConfig === 'string' ? undefined : promptOrConfig.userId;
+      const isEdit = typeof promptOrConfig === 'string' ? false : promptOrConfig.isEdit;
+      
+      // Only reset project for new generation, not for edits
+      if (!isEdit) {
+        resetProjectStore();
+      }
       
       if (typeof promptOrConfig !== 'string') {
         setCurrentModel(selectedModel);
@@ -494,7 +583,7 @@ export function useGenerateProject(options: UseGenerateProjectOptions = {}) {
       
       // Use real AI generation - throw error if it fails (no more silent fallback)
       try {
-        return await generateWithAI(prompt, selectedModel, userApiKey, provider);
+        return await generateWithAI(prompt, selectedModel, userApiKey, provider, autoSelectKey, userId, isEdit);
       } catch (error: any) {
         console.error('AI generation failed:', error);
         // Re-throw to show error to user instead of silently falling back to demo
@@ -515,29 +604,18 @@ export function useGenerateProject(options: UseGenerateProjectOptions = {}) {
         : mutation.variables?.prompt;
       logGeneration(promptText, 'completed').catch(console.error);
       
-      // Convert to project format
-      const projectName = typeof result.expoConfig?.name === 'string' 
-        ? result.expoConfig.name 
-        : 'New Project';
-      const projectSlug = typeof result.expoConfig?.slug === 'string'
-        ? result.expoConfig.slug
-        : 'new-project';
-        
-      const project = {
-        id: crypto.randomUUID(),
-        name: projectName,
-        slug: projectSlug,
-        description: '',
-        files: result.files,
-        expo_config: result.expoConfig,
-        dependencies: result.dependencies,
-        dev_dependencies: result.devDependencies,
-        status: 'active' as const,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
+      // Get current project from store - files were already added progressively
+      const currentProject = useProjectStore.getState().project;
       
-      setProject(project);
+      if (currentProject) {
+        // Just update the status to 'active' - files are already there
+        setProject({
+          ...currentProject,
+          status: 'active',
+          updated_at: new Date().toISOString(),
+        });
+      }
+      
       onSuccess?.(result);
     },
     onError: (error: Error) => {
@@ -559,14 +637,14 @@ export function useGenerateProject(options: UseGenerateProjectOptions = {}) {
   });
 
   const generateProject = useCallback(
-    async (promptOrConfig: string | { prompt: string; model: AIModel; name?: string; description?: string; apiKey?: string; provider?: string }) => {
+    async (promptOrConfig: string | { prompt: string; model: AIModel; name?: string; description?: string; apiKey?: string; provider?: string; autoSelectKey?: boolean; userId?: string; isEdit?: boolean }) => {
       return await mutation.mutateAsync(promptOrConfig);
     },
     [mutation]
   );
 
   const generateWithConfig = useCallback(
-    async (config: { prompt: string; model: AIModel; name?: string; description?: string; apiKey?: string; provider?: string }) => {
+    async (config: { prompt: string; model: AIModel; name?: string; description?: string; apiKey?: string; provider?: string; autoSelectKey?: boolean; userId?: string; isEdit?: boolean }) => {
       return await mutation.mutateAsync(config);
     },
     [mutation]

@@ -83,6 +83,10 @@ export default function DashboardPage() {
   const [creatingProject, setCreatingProject] = useState(false);
   const hasText = newPrompt.length > 0;
   
+  // AI Model selection for generation
+  const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash');
+  const [selectedApiKeyId, setSelectedApiKeyId] = useState<string | null>(null);
+  
   // API Key form
   const [showApiForm, setShowApiForm] = useState(false);
   const [newApiKey, setNewApiKey] = useState({ name: '', key: '', provider: 'openai' as const });
@@ -210,7 +214,23 @@ export default function DashboardPage() {
       });
       
       toast.success('Project created!');
-      router.push(`/editor?project=${project.id}&prompt=${encodeURIComponent(newPrompt)}`);
+      
+      // Clear previous chat history to start fresh for new project
+      localStorage.removeItem('capycode_chat_history');
+      
+      // Store prompt in localStorage to avoid URL length limits
+      localStorage.setItem('pending_prompt', newPrompt);
+      localStorage.setItem('pending_model', selectedModel);
+      if (selectedApiKeyId) {
+        localStorage.setItem('pending_apiKeyId', selectedApiKeyId);
+      }
+      
+      // Enable auto-key selection for the new project
+      localStorage.setItem('pending_autoSelectKey', 'true');
+      localStorage.setItem('pending_userId', user?.id || '');
+      
+      // Only pass project ID in URL - prompt is too long for URL
+      router.push(`/editor?project=${project.id}`);
     } catch (error) {
       toast.error('Failed to create project');
     } finally {
@@ -408,9 +428,33 @@ export default function DashboardPage() {
                           className="w-full h-28 px-5 py-4 bg-transparent text-base text-white placeholder-white/30 resize-none focus:outline-none"
                         />
                         <div className="flex items-center justify-between px-4 pb-3">
-                          <div className="flex items-center gap-2 text-white/30 text-xs">
-                            <Code2 className="w-3.5 h-3.5" />
-                            <span>React Native</span>
+                          <div className="flex items-center gap-3">
+                            {/* Model selector */}
+                            <select
+                              value={selectedModel}
+                              onChange={(e) => setSelectedModel(e.target.value)}
+                              className="bg-[#1a1a1d] border border-[#2a2a2e] rounded-lg px-2 py-1.5 text-xs text-white/70 focus:outline-none focus:border-emerald-500/50"
+                            >
+                              <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                              <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                              <option value="gpt-4o">GPT-4o</option>
+                              <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                            </select>
+                            {/* API Key selector */}
+                            {apiKeys.length > 0 && (
+                              <select
+                                value={selectedApiKeyId || ''}
+                                onChange={(e) => setSelectedApiKeyId(e.target.value || null)}
+                                className="bg-[#1a1a1d] border border-[#2a2a2e] rounded-lg px-2 py-1.5 text-xs text-white/70 focus:outline-none focus:border-emerald-500/50"
+                              >
+                                <option value="">Default API</option>
+                                {apiKeys.map((key) => (
+                                  <option key={key.id} value={key.id}>
+                                    {key.name} ({key.provider})
+                                  </option>
+                                ))}
+                              </select>
+                            )}
                           </div>
                           <button
                             onClick={handleCreateProject}

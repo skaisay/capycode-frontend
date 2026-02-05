@@ -25,6 +25,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { useGenerateProject } from '@/hooks/useGenerateProject';
+import { useProjectStore } from '@/stores/projectStore';
 import { UserApiKey, PROVIDER_INFO, getStatusColor, getStatusLabel, getCachedKeyStatuses, setCachedKeyStatus } from '@/lib/userApiKeys';
 import { getApiKeys, DBApiKey } from '@/lib/database';
 import { useAuth } from '@/hooks/useAuth';
@@ -39,6 +40,7 @@ interface AIPromptPanelProps {
     progress: number;
     currentFile?: string;
   };
+  initialPrompt?: string; // Prompt from dashboard
 }
 
 interface AIStatus {
@@ -101,7 +103,8 @@ function saveSelectedKey(keyId: string | null) {
   }
 }
 
-export function AIPromptPanel({ isGenerating, progress }: AIPromptPanelProps) {
+export function AIPromptPanel({ isGenerating, progress, initialPrompt }: AIPromptPanelProps) {
+  // Model and API key are now stored in localStorage (set by dashboard/IDELayout)
   const [prompt, setPrompt] = useState('');
   const [selectedModel, setSelectedModel] = useState<AIModel>(getDefaultModel());
   const [showModelSelector, setShowModelSelector] = useState(false);
@@ -111,9 +114,11 @@ export function AIPromptPanel({ isGenerating, progress }: AIPromptPanelProps) {
   const [currentStatus, setCurrentStatus] = useState<'idle' | 'thinking' | 'editing' | 'searching'>('idle');
   const [userApiKeys, setUserApiKeys] = useState<UserApiKey[]>([]);
   const [selectedUserKey, setSelectedUserKey] = useState<string | null>(getSavedSelectedKey());
+  const [hasProcessedInitialPrompt, setHasProcessedInitialPrompt] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
   
   const { user } = useAuth();
+  const { project } = useProjectStore();
 
   const { generateProject } = useGenerateProject();
 
@@ -208,6 +213,92 @@ export function AIPromptPanel({ isGenerating, progress }: AIPromptPanelProps) {
     checkAIStatus();
   }, []);
 
+  // Handle initial prompt from dashboard - auto-submit
+  useEffect(() => {
+    if (initialPrompt && !hasProcessedInitialPrompt && !isGenerating) {
+      console.log('[AIPromptPanel] Processing initial prompt from dashboard:', initialPrompt.substring(0, 50) + '...');
+      setHasProcessedInitialPrompt(true);
+      
+      // Get auto-select settings from localStorage
+      const autoSelectKey = localStorage.getItem('auto_select_key') === 'true';
+      const pendingUserId = localStorage.getItem('pending_user_id');
+      
+      // Clear these settings
+      localStorage.removeItem('auto_select_key');
+      localStorage.removeItem('pending_user_id');
+      
+      // Add user message to chat
+      const userMessage: ChatMessage = {
+        id: Date.now().toString(),
+        role: 'user',
+        content: initialPrompt,
+        timestamp: Date.now(),
+      };
+      setChatHistory(prev => [...prev, userMessage]);
+      
+      // Add thinking message
+      const thinkingMessageId = (Date.now() + 0.5).toString();
+      const thinkingMessage: ChatMessage = {
+        id: thinkingMessageId,
+        role: 'assistant',
+        content: 'Analyzing your request...',
+        timestamp: Date.now(),
+        status: 'thinking',
+      };
+      setChatHistory(prev => [...prev, thinkingMessage]);
+      setCurrentStatus('thinking');
+      
+      // Start generation
+      const doGenerate = async () => {
+        try {
+          const result = await generateProject({
+            prompt: initialPrompt,
+            model: selectedModel,
+            autoSelectKey: autoSelectKey,
+            userId: pendingUserId || user?.id,
+          });
+          
+          // Update chat with success message
+          const appName = result?.expoConfig?.name || 'App';
+          const filesCount = result?.files?.length || 0;
+          const usedKeyInfo = (result as any)?.usedKey;
+          let keyUsedInfo = '';
+          if (usedKeyInfo?.name) {
+            keyUsedInfo = `Used **${usedKeyInfo.provider?.toUpperCase() || 'API'}** key (${usedKeyInfo.name})`;
+          } else {
+            keyUsedInfo = `Used **${selectedModel}** (auto-selected)`;
+          }
+          
+          const filesList = result?.files?.slice(0, 5).map((f: any) => f.path).join(', ') || '';
+          const moreFiles = (result?.files?.length || 0) > 5 ? ` and ${(result?.files?.length || 0) - 5} more...` : '';
+          
+          const successMessage: ChatMessage = {
+            id: thinkingMessageId,
+            role: 'assistant',
+            content: `**${appName}** generated successfully!\n\n${keyUsedInfo}\n\nCreated **${filesCount} files**: ${filesList}${moreFiles}\n\nCheck the file explorer on the left and preview on the right.`,
+            timestamp: Date.now(),
+            status: 'complete',
+            files: result?.files?.map((f: any) => f.path) || [],
+          };
+          setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? successMessage : msg));
+        } catch (err: any) {
+          const errorMessage: ChatMessage = {
+            id: thinkingMessageId,
+            role: 'assistant',
+            content: `**Generation failed**\n\n${err.message || 'Unknown error'}\n\nPlease try again or check your API keys.`,
+            timestamp: Date.now(),
+            status: 'error',
+          };
+          setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? errorMessage : msg));
+        } finally {
+          setCurrentStatus('idle');
+        }
+      };
+      
+      doGenerate();
+    }
+  }, [initialPrompt, hasProcessedInitialPrompt, isGenerating, user, selectedModel]);
+
   // Save chat history to localStorage
   useEffect(() => {
     if (chatHistory.length > 0) {
@@ -220,7 +311,7 @@ export function AIPromptPanel({ isGenerating, progress }: AIPromptPanelProps) {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory, isGenerating]);
 
-  // Update status based on progress
+  // Update status based on progress and update thinking message
   useEffect(() => {
     if (isGenerating) {
       if (progress.stage === 'analyzing') {
@@ -230,10 +321,23 @@ export function AIPromptPanel({ isGenerating, progress }: AIPromptPanelProps) {
       } else {
         setCurrentStatus('editing');
       }
+      
+      // Update the "thinking" message with progress info
+      const progressText = progress.currentFile 
+        ? `Generating **${progress.currentFile}**... (${progress.progress}%)`
+        : progress.message 
+          ? `${progress.message} (${progress.progress}%)`
+          : 'Analyzing your request...';
+          
+      setChatHistory(prev => prev.map(msg => 
+        msg.status === 'thinking' 
+          ? { ...msg, content: progressText }
+          : msg
+      ));
     } else {
       setCurrentStatus('idle');
     }
-  }, [isGenerating, progress.stage]);
+  }, [isGenerating, progress.stage, progress.progress, progress.currentFile, progress.message]);
 
   const checkAIStatus = async () => {
     setCheckingStatus(true);
@@ -259,6 +363,139 @@ export function AIPromptPanel({ isGenerating, progress }: AIPromptPanelProps) {
     }
   };
 
+  // Detect if the prompt is a question (should chat) or a generation request
+  const isQuestionPrompt = (text: string): boolean => {
+    const lowerText = text.toLowerCase().trim();
+    
+    // FIRST: Check for explicit generation requests (these ALWAYS generate)
+    const generationPatterns = [
+      // English - explicit creation
+      /\b(create|build|make|generate|design|implement|develop)\b.*(app|application|screen|page|component|feature|button|form|layout)/i,
+      /^(create|build|make|generate)\s/i,
+      // Russian - explicit creation  
+      /\b(создай|сделай|построй|сгенерируй|напиши код|разработай)\b/i,
+      /(новое приложение|new app|from scratch|с нуля)/i,
+      // Add/modify specific elements
+      /\b(add|добавь)\b.*(button|screen|page|кнопк|экран|страниц)/i,
+    ];
+    
+    for (const pattern of generationPatterns) {
+      if (pattern.test(lowerText)) {
+        console.log('[isQuestionPrompt] Detected GENERATION request:', lowerText.slice(0, 50));
+        return false;
+      }
+    }
+    
+    // SECOND: Check for questions (these should NOT generate code)
+    const questionPatterns = [
+      // Question marks
+      /\?$/,
+      // English question words (anywhere in text)
+      /\b(what|why|how|explain|describe|tell|can you|could you|would you|help me understand)\b/i,
+      // Russian question words and phrases (anywhere) - all forms!
+      /\b(что|почему|зачем|как|кто|где|когда|какой|какая|какие)\b/i,
+      // Russian verbs for "tell me" / "explain" in ALL forms
+      /(расскажи|рассказать|рассказывай|расскажите)/i,
+      /(объясни|объяснить|объясните|объясняй)/i,
+      /(подскажи|подсказать|подскажите)/i,
+      /(покажи|показать|покажите)/i,
+      /(скажи|сказать|скажите)/i,
+      /(помоги|помочь|помогите)/i,
+      /(опиши|описать|опишите)/i,
+      // "What you did" phrases
+      /(что ты|что это|как это|зачем это|почему это)/i,
+      /(что ты сделал|что сделала|что было сделано)/i,
+      // Conversational phrases
+      /(привет|hello|hi there|hey|здравствуй)/i,
+      /(спасибо|thanks|thank you|благодар)/i,
+      /(посоветуй|recommend|suggest|what do you think)/i,
+      // "Only you can" / modal phrases  
+      /(только ты|можешь ли ты|ты можешь)/i,
+    ];
+    
+    for (const pattern of questionPatterns) {
+      if (pattern.test(lowerText)) {
+        console.log('[isQuestionPrompt] Detected QUESTION:', lowerText.slice(0, 50));
+        return true;
+      }
+    }
+    
+    // THIRD: If we have a project already, short messages are likely questions/edits
+    const hasExistingProject = !!project && project.files.length > 0;
+    const wordCount = lowerText.split(/\s+/).length;
+    
+    if (hasExistingProject && wordCount < 15) {
+      console.log('[isQuestionPrompt] Short message with existing project, treating as QUESTION');
+      return true;
+    }
+    
+    // Default: if unsure and project exists, ask don't generate
+    if (hasExistingProject) {
+      console.log('[isQuestionPrompt] Project exists, defaulting to QUESTION');
+      return true;
+    }
+    
+    console.log('[isQuestionPrompt] No project, defaulting to GENERATION');
+    return false;
+  };
+
+  // Handle chat-only response (no code generation)
+  const handleChatResponse = async (userPrompt: string, messageId: string) => {
+    try {
+      // Get user's API key
+      const selectedKey = selectedUserKey ? userApiKeys.find(k => k.id === selectedUserKey) : null;
+      
+      // Build context from current project
+      let context = '';
+      if (project && project.files.length > 0) {
+        context = `Current project: ${project.name || 'Untitled'}\n`;
+        context += `Files: ${project.files.map(f => f.path).join(', ')}\n`;
+        // Include some code context
+        const mainFile = project.files.find(f => f.path.includes('App.tsx') || f.path.includes('index.tsx'));
+        if (mainFile) {
+          context += `\nMain file (${mainFile.path}):\n${mainFile.content.slice(0, 2000)}`;
+        }
+      }
+      
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: userPrompt,
+          context,
+          apiKey: selectedKey?.encryptedKey,
+          provider: selectedKey?.provider,
+          userId: user?.id,
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to get response');
+      }
+      
+      const assistantMessage: ChatMessage = {
+        id: messageId,
+        role: 'assistant',
+        content: data.response,
+        timestamp: Date.now(),
+        status: 'complete',
+      };
+      
+      setChatHistory(prev => prev.map(msg => msg.id === messageId ? assistantMessage : msg));
+    } catch (err: any) {
+      const errorMessage: ChatMessage = {
+        id: messageId,
+        role: 'assistant',
+        content: `**Error:** ${err.message}\n\nPlease try again or rephrase your question.`,
+        timestamp: Date.now(),
+        status: 'error',
+      };
+      setChatHistory(prev => prev.map(msg => msg.id === messageId ? errorMessage : msg));
+    }
+  };
+
   const handleSubmit = async () => {
     if (!prompt.trim() || isGenerating) return;
 
@@ -274,25 +511,54 @@ export function AIPromptPanel({ isGenerating, progress }: AIPromptPanelProps) {
     setPrompt('');
     setCurrentStatus('thinking');
 
+    // Add a "thinking" message that will be updated
+    const thinkingMessageId = (Date.now() + 0.5).toString();
+    const thinkingMessage: ChatMessage = {
+      id: thinkingMessageId,
+      role: 'assistant',
+      content: 'Analyzing your request...',
+      timestamp: Date.now(),
+      status: 'thinking',
+    };
+    setChatHistory(prev => [...prev, thinkingMessage]);
+
+    // Check if this is just a question or a generation request
+    const isQuestion = isQuestionPrompt(userPrompt);
+    
+    if (isQuestion) {
+      // Just chat, don't generate code
+      await handleChatResponse(userPrompt, thinkingMessageId);
+      setCurrentStatus('idle');
+      return;
+    }
+
     try {
       // Get user's API key if selected
       const selectedKey = selectedUserKey ? userApiKeys.find(k => k.id === selectedUserKey) : null;
       const userApiKey = selectedKey?.encryptedKey;
       const keyProvider = selectedKey?.provider;
       
+      // Check if we should auto-select key (no specific key selected but keys available)
+      const shouldAutoSelect = !selectedKey && userApiKeys.length > 0;
+      
       console.log('[AIPromptPanel] Submit debug:', {
         selectedUserKey,
         selectedKeyFound: !!selectedKey,
         provider: keyProvider,
         userApiKeysCount: userApiKeys.length,
-        hasEncryptedKey: !!userApiKey
+        hasEncryptedKey: !!userApiKey,
+        autoSelectKey: shouldAutoSelect,
+        isQuestion
       });
       
       // Debug log with masked key
       const keyInfo = userApiKey 
         ? `user key (${userApiKey.slice(0, 6)}...${userApiKey.slice(-4)}) provider: ${keyProvider}` 
-        : 'server key';
+        : shouldAutoSelect ? 'auto-selecting key' : 'server key';
       console.log(`[AIPromptPanel] Generating with ${keyInfo}, model: ${selectedModel}`);
+      
+      // Check if we already have a project - if so, this is an edit
+      const hasExistingProject = !!project && project.files.length > 0;
       
       // Generate and get result
       const result = await generateProject({
@@ -300,39 +566,56 @@ export function AIPromptPanel({ isGenerating, progress }: AIPromptPanelProps) {
         model: selectedModel,
         apiKey: userApiKey,
         provider: keyProvider,
+        autoSelectKey: shouldAutoSelect,
+        userId: user?.id,
+        isEdit: hasExistingProject, // Don't reset project if we're editing
       });
 
-      // Show success with REAL data from the result
-      const appName = result?.expoConfig?.name || 'App';
+      // Build meaningful success message based on what actually happened
+      const appName = result?.expoConfig?.name || project?.name || 'App';
       const filesCount = result?.files?.length || 0;
-      const keyUsedInfo = selectedKey 
-        ? `🔑 Used your **${selectedKey.provider.toUpperCase()}** API key (${selectedKey.name})`
-        : `🤖 Used **${selectedModel}** (server key)`;
-        
-      const filesList = result?.files?.slice(0, 5).map((f: any) => f.path).join(', ') || '';
-      const moreFiles = (result?.files?.length || 0) > 5 ? ` and ${(result?.files?.length || 0) - 5} more...` : '';
+      const newFiles = result?.files?.filter((f: any) => !project?.files.find(pf => pf.path === f.path)) || [];
+      const modifiedFiles = result?.files?.filter((f: any) => project?.files.find(pf => pf.path === f.path)) || [];
+      
+      // Create action-based message
+      let actionDescription = '';
+      if (hasExistingProject) {
+        if (newFiles.length > 0 && modifiedFiles.length > 0) {
+          actionDescription = `Added ${newFiles.length} new file${newFiles.length > 1 ? 's' : ''} and updated ${modifiedFiles.length} existing file${modifiedFiles.length > 1 ? 's' : ''}`;
+        } else if (newFiles.length > 0) {
+          actionDescription = `Added ${newFiles.length} new file${newFiles.length > 1 ? 's' : ''}: ${newFiles.slice(0, 3).map((f: any) => f.path.split('/').pop()).join(', ')}`;
+        } else if (modifiedFiles.length > 0) {
+          actionDescription = `Updated ${modifiedFiles.length} file${modifiedFiles.length > 1 ? 's' : ''}: ${modifiedFiles.slice(0, 3).map((f: any) => f.path.split('/').pop()).join(', ')}`;
+        } else {
+          actionDescription = `Processed ${filesCount} files`;
+        }
+      } else {
+        actionDescription = `Created **${appName}** with ${filesCount} files`;
+      }
         
       const assistantMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
+        id: thinkingMessageId,
         role: 'assistant',
-        content: `✅ **${appName}** generated successfully!\n\n${keyUsedInfo}\n\n📁 Created **${filesCount} files**: ${filesList}${moreFiles}\n\nCheck the file explorer on the left and preview on the right!`,
+        content: `${actionDescription}\n\nYour changes are ready. Check the preview on the right to see the result.`,
         timestamp: Date.now(),
         status: 'complete',
         files: result?.files?.map((f: any) => f.path) || [],
       };
-      setChatHistory(prev => [...prev, assistantMessage]);
+      // Replace thinking message with success message
+      setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? assistantMessage : msg));
     } catch (err: any) {
       // Generate detailed error message
       const errorContent = getDetailedErrorMessage(err);
       
       const errorMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
+        id: thinkingMessageId, // Replace thinking message
         role: 'assistant',
         content: errorContent,
         timestamp: Date.now(),
         status: 'error',
       };
-      setChatHistory(prev => [...prev, errorMessage]);
+      // Replace thinking message with error
+      setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? errorMessage : msg));
       
       // Refresh AI status after error
       checkAIStatus();
@@ -347,7 +630,7 @@ export function AIPromptPanel({ isGenerating, progress }: AIPromptPanelProps) {
     
     // Quota exceeded
     if (errorMsg.includes('quota') || errorMsg.includes('exceeded') || errorMsg.includes('limit') || errorMsg.includes('429')) {
-      return `⚠️ **API Quota Exceeded**
+      return `**API Quota Exceeded**
 
 You have reached the usage limit for the AI service.
 
@@ -366,7 +649,7 @@ Please wait a few minutes and try again.`;
     
     // API key issues
     if (errorMsg.includes('api key') || errorMsg.includes('unauthorized') || errorMsg.includes('401') || errorMsg.includes('invalid')) {
-      return `🔑 **API Key Error**
+      return `**API Key Error**
 
 Your API key cannot be used. Common causes:
 
@@ -394,7 +677,7 @@ Contact support if the issue persists.`;
     
     // Network errors
     if (errorMsg.includes('network') || errorMsg.includes('fetch') || errorMsg.includes('connection') || errorMsg.includes('timeout')) {
-      return `🌐 **Connection Error**
+      return `**Connection Error**
 
 Unable to connect to the AI service.
 
@@ -409,7 +692,7 @@ If the problem persists, the service may be experiencing downtime.`;
     
     // Service unavailable
     if (errorMsg.includes('503') || errorMsg.includes('service unavailable') || errorMsg.includes('not configured')) {
-      return `🔧 **Service Temporarily Unavailable**
+      return `**Service Temporarily Unavailable**
 
 The AI service is currently unavailable.
 
@@ -423,7 +706,7 @@ Please try again in a few minutes.`;
     
     // Rate limiting
     if (errorMsg.includes('rate') || errorMsg.includes('too many')) {
-      return `⏱️ **Too Many Requests**
+      return `**Too Many Requests**
 
 You're sending requests too quickly.
 
@@ -435,7 +718,7 @@ The rate limit will reset automatically.`;
     }
     
     // Default error
-    return `❌ **Generation Error**
+    return `**Generation Error**
 
 ${err.message || 'An unexpected error occurred.'}
 

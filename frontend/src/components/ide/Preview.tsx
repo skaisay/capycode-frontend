@@ -91,6 +91,13 @@ export function Preview({ project, isGenerating }: PreviewProps) {
     return appFile?.content || null;
   }, [project?.files]);
 
+  // Auto-refresh preview when content changes
+  useEffect(() => {
+    if (appContent) {
+      setRefreshKey(k => k + 1);
+    }
+  }, [appContent]);
+
   // Force refresh preview
   const handleRefresh = () => setRefreshKey(k => k + 1);
 
@@ -113,12 +120,19 @@ export function Preview({ project, isGenerating }: PreviewProps) {
     setIsDragging(false);
   }, []);
 
-  // Handle wheel zoom - prevent page scroll
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const delta = e.deltaY > 0 ? -0.05 : 0.05;
-    setScale(s => Math.min(Math.max(s + delta, 0.3), 1.5));
+  // Handle wheel zoom - use native event listener to avoid passive warning
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    
+    const handleWheelNative = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.05 : 0.05;
+      setScale(s => Math.min(Math.max(s + delta, 0.3), 1.5));
+    };
+    
+    container.addEventListener('wheel', handleWheelNative, { passive: false });
+    return () => container.removeEventListener('wheel', handleWheelNative);
   }, []);
 
   const handleZoomIn = () => setScale(s => Math.min(s + 0.1, 1.5));
@@ -243,12 +257,11 @@ export function Preview({ project, isGenerating }: PreviewProps) {
       <div 
         ref={containerRef}
         className="flex-1 flex items-center justify-center overflow-hidden relative cursor-grab active:cursor-grabbing select-none"
-        style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+        style={{ userSelect: 'none', WebkitUserSelect: 'none', touchAction: 'none' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        onWheel={handleWheel}
       >
         <div 
           className="relative z-10 select-none"
@@ -455,8 +468,16 @@ function LivePreviewContent({ project, appContent }: { project: Project | null; 
   );
 }
 
-// Generate HTML for previewing React Native code
+// Generate visual preview HTML from React Native code
 function generatePreviewHTML(code: string, appName: string): string {
+  // Extract colors, styles and UI info from the code
+  const colors = extractColors(code);
+  const uiElements = extractUIElements(code);
+  
+  const primaryColor = colors.primary || '#10b981';
+  const backgroundColor = colors.background || '#000000';
+  const textColor = colors.text || '#ffffff';
+  
   return `
 <!DOCTYPE html>
 <html>
@@ -471,89 +492,364 @@ function generatePreviewHTML(code: string, appName: string): string {
       box-sizing: border-box;
       user-select: none !important;
       -webkit-user-select: none !important;
-      -moz-user-select: none !important;
-      -ms-user-select: none !important;
     }
     body { 
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0a0a0b;
-      color: white;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+      background: ${backgroundColor};
+      color: ${textColor};
+      min-height: 100vh;
+      overflow-x: hidden;
+      overflow-y: auto;
+    }
+    .app-container {
       min-height: 100vh;
       display: flex;
       flex-direction: column;
-      pointer-events: none;
-      overflow: hidden;
-    }
-    .preview-container {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
       padding: 16px;
     }
-    .preview-header {
+    .header {
       padding: 12px 0;
       margin-bottom: 16px;
     }
-    .preview-title {
+    .header h1 {
       font-size: 24px;
       font-weight: 700;
-      color: white;
+      color: ${textColor};
     }
-    .preview-content {
-      flex: 1;
+    .header p {
+      font-size: 14px;
+      color: rgba(255,255,255,0.6);
+      margin-top: 4px;
+    }
+    .card {
+      background: rgba(255,255,255,0.05);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 12px;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .card h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .card p {
+      font-size: 14px;
+      color: rgba(255,255,255,0.6);
+      line-height: 1.5;
+    }
+    .button {
+      background: ${primaryColor};
+      color: white;
+      border: none;
+      padding: 14px 24px;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      width: 100%;
+      margin-top: 8px;
+      cursor: pointer;
+    }
+    .button-secondary {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.2);
+      color: ${textColor};
+    }
+    .input-field {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      color: ${textColor};
+      padding: 14px 16px;
+      border-radius: 12px;
+      font-size: 16px;
+      width: 100%;
+      margin-bottom: 12px;
+    }
+    .input-field::placeholder {
+      color: rgba(255,255,255,0.4);
+    }
+    .list-item {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      background: rgba(255,255,255,0.03);
+      border-radius: 12px;
+      margin-bottom: 8px;
+    }
+    .list-item-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: ${primaryColor}22;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-right: 12px;
+      color: ${primaryColor};
+    }
+    .list-item-content h4 {
+      font-size: 15px;
+      font-weight: 500;
+    }
+    .list-item-content p {
+      font-size: 13px;
+      color: rgba(255,255,255,0.5);
+      margin-top: 2px;
+    }
+    .bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      justify-content: space-around;
+      padding: 12px 16px 24px;
+      background: rgba(0,0,0,0.9);
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+    .nav-item {
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
-      color: #6b6b70;
+      color: rgba(255,255,255,0.5);
+      font-size: 10px;
     }
-    .code-indicator {
-      background: #1f1f23;
+    .nav-item.active {
+      color: ${primaryColor};
+    }
+    .nav-item svg {
+      width: 24px;
+      height: 24px;
+      margin-bottom: 4px;
+    }
+    .image-placeholder {
+      background: linear-gradient(135deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%);
       border-radius: 12px;
-      padding: 16px;
-      font-family: 'Monaco', 'Menlo', monospace;
-      font-size: 11px;
-      color: #10b981;
-      max-width: 100%;
-      overflow-x: auto;
-      white-space: pre-wrap;
-      word-break: break-all;
+      height: 180px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+      color: rgba(255,255,255,0.2);
     }
-    .success-badge {
-      display: inline-flex;
+    .image-placeholder svg {
+      width: 48px;
+      height: 48px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+      background: ${primaryColor}22;
+      color: ${primaryColor};
+    }
+    .flex-row {
+      display: flex;
       align-items: center;
       gap: 8px;
-      padding: 8px 16px;
-      background: rgba(16, 185, 129, 0.1);
-      border: 1px solid rgba(16, 185, 129, 0.2);
-      border-radius: 20px;
-      color: #10b981;
-      font-size: 12px;
-      margin-bottom: 16px;
     }
-    .dot { width: 6px; height: 6px; border-radius: 50%; background: #10b981; }
+    .spacer {
+      flex: 1;
+    }
   </style>
 </head>
 <body>
-  <div class="preview-container">
-    <div class="preview-header">
-      <h1 class="preview-title">${appName}</h1>
-    </div>
-    <div class="preview-content">
-      <div class="success-badge">
-        <div class="dot"></div>
-        Code Generated
-      </div>
-      <p style="margin-bottom: 16px; text-align: center; font-size: 14px;">
-        Your app code is ready!<br>
-        Use Expo Go to test on device.
-      </p>
-      <div class="code-indicator">
-        ${code.substring(0, 500).replace(/</g, '&lt;').replace(/>/g, '&gt;')}${code.length > 500 ? '...' : ''}
-      </div>
-    </div>
+  <div class="app-container">
+    ${renderUIFromCode(uiElements, appName, primaryColor)}
   </div>
 </body>
 </html>
+`;
+}
+
+// Extract colors from code
+function extractColors(code: string): { primary?: string; background?: string; text?: string; secondary?: string } {
+  const colors: any = {};
+  
+  // Look for color definitions
+  const colorPatterns = [
+    /primary[:\s'"]*([#][0-9a-fA-F]{6}|[#][0-9a-fA-F]{3})/gi,
+    /backgroundColor[:\s'"]*([#][0-9a-fA-F]{6}|[#][0-9a-fA-F]{3})/gi,
+    /background[:\s'"]*([#][0-9a-fA-F]{6}|[#][0-9a-fA-F]{3})/gi,
+    /color[:\s'"]*([#][0-9a-fA-F]{6}|[#][0-9a-fA-F]{3})/gi,
+  ];
+  
+  const bgMatch = code.match(/backgroundColor\s*[:=]\s*['"]?([#][0-9a-fA-F]{3,8})/i);
+  if (bgMatch) colors.background = bgMatch[1];
+  
+  const primaryMatch = code.match(/primary|accent|brand/i);
+  if (primaryMatch) {
+    const nearbyColor = code.slice(Math.max(0, primaryMatch.index! - 50), primaryMatch.index! + 100)
+      .match(/[#][0-9a-fA-F]{6}/);
+    if (nearbyColor) colors.primary = nearbyColor[0];
+  }
+  
+  // Common color keywords
+  if (code.includes('#10b981') || code.includes('emerald')) colors.primary = '#10b981';
+  if (code.includes('#3b82f6') || code.includes('blue')) colors.primary = '#3b82f6';
+  if (code.includes('#8b5cf6') || code.includes('violet')) colors.primary = '#8b5cf6';
+  if (code.includes('#f59e0b') || code.includes('amber')) colors.primary = '#f59e0b';
+  if (code.includes('#ef4444') || code.includes('red')) colors.primary = '#ef4444';
+  
+  return colors;
+}
+
+// Extract UI elements from code to determine what to render
+function extractUIElements(code: string): { 
+  hasHeader: boolean; 
+  hasNav: boolean; 
+  hasCards: boolean;
+  hasInputs: boolean;
+  hasButtons: boolean;
+  hasList: boolean;
+  hasImages: boolean;
+  title?: string;
+  subtitle?: string;
+  buttonTexts: string[];
+  inputPlaceholders: string[];
+  listItems: string[];
+} {
+  const result = {
+    hasHeader: /header|title|<Text[^>]*style[^>]*title/i.test(code),
+    hasNav: /bottom|tab|navigation|navigator/i.test(code),
+    hasCards: /card|item|box|container/i.test(code),
+    hasInputs: /TextInput|input|search|email|password/i.test(code),
+    hasButtons: /Button|TouchableOpacity|Pressable|onPress/i.test(code),
+    hasList: /FlatList|list|map\(|scroll/i.test(code),
+    hasImages: /Image|photo|avatar|icon|picture/i.test(code),
+    title: '',
+    subtitle: '',
+    buttonTexts: [] as string[],
+    inputPlaceholders: [] as string[],
+    listItems: [] as string[],
+  };
+  
+  // Extract title from code
+  const titleMatch = code.match(/['"`]((?:Welcome|Hello|Home|Dashboard|Profile|Settings|Shop|Store|Cart|My |Get Started|Sign|Log)[^'"`]{0,30})['"`]/i);
+  if (titleMatch) result.title = titleMatch[1];
+  
+  // Extract button texts
+  const buttonRegex = /['"`]((?:Submit|Save|Continue|Next|Add|Create|Buy|Order|Sign|Log|Get|Start|Send|Confirm|Cancel|Delete|Update)[^'"`]{0,20})['"`]/gi;
+  let buttonMatch;
+  while ((buttonMatch = buttonRegex.exec(code)) !== null) {
+    if (buttonMatch[1] && !result.buttonTexts.includes(buttonMatch[1])) {
+      result.buttonTexts.push(buttonMatch[1]);
+    }
+  }
+  
+  // Extract placeholders
+  const placeholderRegex = /placeholder\s*[=:]\s*['"`]([^'"`]+)['"`]/gi;
+  let placeholderMatch;
+  while ((placeholderMatch = placeholderRegex.exec(code)) !== null) {
+    if (placeholderMatch[1]) result.inputPlaceholders.push(placeholderMatch[1]);
+  }
+  
+  return result;
+}
+
+// Render UI based on extracted elements
+function renderUIFromCode(ui: ReturnType<typeof extractUIElements>, appName: string, primaryColor: string): string {
+  let html = '';
+  
+  // Header
+  html += `
+    <div class="header">
+      <h1>${ui.title || appName}</h1>
+      ${ui.subtitle ? `<p>${ui.subtitle}</p>` : '<p>Your React Native App</p>'}
+    </div>
   `;
+  
+  // Image placeholder if app has images
+  if (ui.hasImages) {
+    html += `
+      <div class="image-placeholder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+          <circle cx="8.5" cy="8.5" r="1.5"/>
+          <polyline points="21 15 16 10 5 21"/>
+        </svg>
+      </div>
+    `;
+  }
+  
+  // Input fields
+  if (ui.hasInputs) {
+    const placeholders = ui.inputPlaceholders.length > 0 
+      ? ui.inputPlaceholders 
+      : ['Enter your email...', 'Password'];
+    
+    for (const placeholder of placeholders.slice(0, 3)) {
+      const inputType = placeholder.toLowerCase().includes('password') ? 'password' : 'text';
+      html += `<input type="${inputType}" class="input-field" placeholder="${placeholder}" />`;
+    }
+  }
+  
+  // Cards or list items
+  if (ui.hasCards || ui.hasList) {
+    const items = [
+      { title: 'Item 1', desc: 'Description here' },
+      { title: 'Item 2', desc: 'Another item' },
+      { title: 'Item 3', desc: 'More content' },
+    ];
+    
+    for (const item of items) {
+      html += `
+        <div class="list-item">
+          <div class="list-item-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+              <polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+          </div>
+          <div class="list-item-content">
+            <h4>${item.title}</h4>
+            <p>${item.desc}</p>
+          </div>
+        </div>
+      `;
+    }
+  }
+  
+  // Buttons
+  if (ui.hasButtons) {
+    const buttonText = ui.buttonTexts[0] || 'Continue';
+    html += `<button class="button">${buttonText}</button>`;
+    
+    if (ui.buttonTexts.length > 1) {
+      html += `<button class="button button-secondary">${ui.buttonTexts[1]}</button>`;
+    }
+  }
+  
+  // Bottom nav
+  if (ui.hasNav) {
+    html += `
+      <div class="bottom-nav">
+        <div class="nav-item active">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+            <polyline points="9 22 9 12 15 12 15 22"/>
+          </svg>
+          <span>Home</span>
+        </div>
+        <div class="nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/>
+            <path d="m21 21-4.35-4.35"/>
+          </svg>
+          <span>Search</span>
+        </div>
+        <div class="nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+          <span>Profile</span>
+        </div>
+      </div>
+    `;
+  }
+  
+  return html;
 }

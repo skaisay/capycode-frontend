@@ -37,7 +37,35 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 export function IDELayout() {
   const searchParams = useSearchParams();
-  const initialPrompt = searchParams.get('prompt') || '';
+  // Read prompt from localStorage instead of URL to avoid URI_TOO_LONG errors
+  const [initialPrompt, setInitialPrompt] = useState('');
+  const [initialModel, setInitialModel] = useState<string | null>(null);
+  const [initialApiKeyId, setInitialApiKeyId] = useState<string | null>(null);
+  const [autoSelectKey, setAutoSelectKey] = useState(false);
+  const [pendingUserId, setPendingUserId] = useState<string | null>(null);
+  
+  // Load pending prompt from localStorage on mount
+  useEffect(() => {
+    const pendingPrompt = localStorage.getItem('pending_prompt');
+    const pendingModel = localStorage.getItem('pending_model');
+    const pendingApiKeyId = localStorage.getItem('pending_apiKeyId');
+    const pendingAutoSelect = localStorage.getItem('pending_autoSelectKey');
+    const pendingUser = localStorage.getItem('pending_userId');
+    
+    if (pendingPrompt) {
+      setInitialPrompt(pendingPrompt);
+      setInitialModel(pendingModel);
+      setInitialApiKeyId(pendingApiKeyId);
+      setAutoSelectKey(pendingAutoSelect === 'true');
+      setPendingUserId(pendingUser);
+      // Clear after reading to avoid re-triggering
+      localStorage.removeItem('pending_prompt');
+      localStorage.removeItem('pending_model');
+      localStorage.removeItem('pending_apiKeyId');
+      localStorage.removeItem('pending_autoSelectKey');
+      localStorage.removeItem('pending_userId');
+    }
+  }, []);
   
   const [activeView, setActiveView] = useState<'preview' | 'code' | 'build'>('preview');
   const [showFiles, setShowFiles] = useState(false);
@@ -70,12 +98,27 @@ export function IDELayout() {
     checkUser();
   }, []);
 
-  // Auto-generate if prompt provided
+  // Auto-generate if prompt provided from localStorage
+  // NOTE: We just pass initialPrompt to AIPromptPanel, which handles the generation
+  // This ensures chat messages are properly displayed
   useEffect(() => {
-    if (initialPrompt && !project) {
-      generateProject(initialPrompt);
+    if (initialPrompt) {
+      // Store model/apiKeyId for AIPromptPanel to read
+      if (initialModel) {
+        localStorage.setItem('selected_model', initialModel);
+      }
+      if (initialApiKeyId) {
+        localStorage.setItem('selected_user_key', initialApiKeyId);
+      }
+      // Store auto-select settings
+      if (autoSelectKey) {
+        localStorage.setItem('auto_select_key', 'true');
+      }
+      if (pendingUserId) {
+        localStorage.setItem('pending_user_id', pendingUserId);
+      }
     }
-  }, [initialPrompt]);
+  }, [initialPrompt, initialModel, initialApiKeyId, autoSelectKey, pendingUserId]);
 
   const handleSave = useCallback(() => {
     toast.success('Changes saved');
@@ -120,6 +163,7 @@ export function IDELayout() {
               <AIPromptPanel 
                 isGenerating={isGenerating}
                 progress={progress}
+                initialPrompt={initialPrompt}
               />
             </div>
           </div>
