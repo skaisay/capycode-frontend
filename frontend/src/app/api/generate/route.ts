@@ -312,28 +312,33 @@ export async function POST(request: NextRequest) {
         
         if (result.success) {
           const duration = Date.now() - startTime;
-          console.log(`[Generate] Success! Duration: ${duration}ms, Files: ${result.result.files?.length}, ExpoName: ${result.result.expoConfig?.name}`);
+          const filesCount = result.result.files?.length || 0;
+          console.log(`[Generate] Success! Duration: ${duration}ms, Files: ${filesCount}, ExpoName: ${result.result.expoConfig?.name}`);
           
-          return NextResponse.json({
-            ...result.result,
-            usedKey: { provider: detectedProvider }
-          }, {
-            headers: {
-              'X-RateLimit-Remaining': String(rateLimitResult.remaining),
-              'X-RateLimit-Reset': String(rateLimitResult.resetTime),
-            },
-          });
-        }
+          // Validate result has files - empty result is an error
+          if (filesCount === 0) {
+            errors.push(`Генерация вернула пустой результат. Попробуйте другой ключ.`);
+            // Continue to try other keys
+          } else {
+            return NextResponse.json({
+              ...result.result,
+              usedKey: { provider: detectedProvider }
+            }, {
+              headers: {
+                'X-RateLimit-Remaining': String(rateLimitResult.remaining),
+                'X-RateLimit-Reset': String(rateLimitResult.resetTime),
+              },
+            });
+          }
+        } else {
+          errors.push(`User key (${detectedProvider}): ${result.error || 'Unknown error'}`);
+          console.log(`[Generate] User key failed: ${result.error}`);
         
-        errors.push(`User key (${detectedProvider}): ${result.error}`);
-        console.log(`[Generate] User key failed: ${result.error}`);
-      console.log(`[Generate] User key failed: ${result.error}`);
-      
-        // If not retryable (network error, parse error), throw immediately
-        if (!result.isRetryable) {
-          throw new Error(result.error);
+          // If not retryable (network error, parse error), throw immediately
+          if (!result.isRetryable) {
+            throw new Error(result.error);
+          }
         }
-        
         // Otherwise continue to try other keys
       }
     }
@@ -366,6 +371,15 @@ export async function POST(request: NextRequest) {
         const result = await tryGenerateWithKey(prompt, key.key, provider, model);
         
         if (result.success) {
+          const filesCount = result.result.files?.length || 0;
+          console.log(`[Generate] Result with key "${key.name}": ${filesCount} files`);
+          
+          // Validate result has files
+          if (filesCount === 0) {
+            errors.push(`${key.name}: Пустой результат генерации`);
+            continue; // Try next key
+          }
+          
           console.log(`[Generate] Success with key "${key.name}"!`);
           // Mark this key as recently used
           await markKeyUsed(key.id);

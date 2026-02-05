@@ -201,16 +201,14 @@ Please modify the existing project based on the user's request. Keep existing fu
     // Check if this was determined to be a chat message instead of generation
     if (result.isChat) {
       console.log('[useGenerateProject] Prompt is chat, not generation:', result.reason);
-      // Return a special result that indicates chat should be used
-      return {
-        isChat: true,
-        reason: result.reason,
-        message: result.message,
-        files: [],
-        dependencies: {},
-        devDependencies: {},
-        expoConfig: {}
-      };
+      // Throw error so it goes to chat handler instead of showing as "success"
+      throw new Error('CHAT_MESSAGE:' + result.reason);
+    }
+    
+    // Check if result has no files - this is an error
+    if (!result.files || result.files.length === 0) {
+      console.error('[useGenerateProject] Empty result from API');
+      throw new Error('Генерация не вернула файлов. Проверьте ваш API ключ.');
     }
     
     setProgress({
