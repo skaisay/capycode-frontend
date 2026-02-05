@@ -349,18 +349,69 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
     // Close key checker
     setShowKeyChecker(false);
     
-    // Retry the failed prompt
+    // Retry the failed prompt with the NEW key directly
     if (failedPrompt) {
       const promptToRetry = failedPrompt;
       setFailedPrompt(null);
       
-      // Set prompt and trigger submit via useEffect or direct call
-      setPrompt(promptToRetry);
-      // Small delay to let state update, then submit
-      setTimeout(() => {
-        const submitBtn = document.querySelector('[data-testid="submit-btn"]') as HTMLButtonElement;
-        if (submitBtn) submitBtn.click();
-      }, 100);
+      // Add user message
+      const userMessage: ChatMessage = {
+        id: Date.now().toString(),
+        role: 'user',
+        content: promptToRetry,
+        timestamp: Date.now(),
+      };
+      setChatHistory(prev => [...prev, userMessage]);
+      
+      // Add thinking message
+      const thinkingMessageId = (Date.now() + 0.5).toString();
+      const thinkingMessage: ChatMessage = {
+        id: thinkingMessageId,
+        role: 'assistant',
+        content: 'Повторяю с выбранным ключом...',
+        timestamp: Date.now(),
+        status: 'thinking',
+      };
+      setChatHistory(prev => [...prev, thinkingMessage]);
+      setCurrentStatus('thinking');
+      
+      try {
+        // Generate with the EXPLICITLY selected key
+        const result = await generateProject({
+          prompt: promptToRetry,
+          model: (model as AIModel) || selectedModel,
+          apiKey: key.encryptedKey,
+          provider: key.provider,
+          autoSelectKey: false, // We have a specific key
+          userId: user?.id,
+          isEdit: project && project.files.length > 0,
+        });
+        
+        // Success message
+        const appName = result?.expoConfig?.name || 'App';
+        const filesCount = result?.files?.length || 0;
+        const successMessage: ChatMessage = {
+          id: thinkingMessageId,
+          role: 'assistant',
+          content: `✅ **${appName}** сгенерирован успешно!\n\nИспользован ключ: **${key.name}**\nСоздано **${filesCount} файлов**\n\nПроверьте файлы слева и превью справа.`,
+          timestamp: Date.now(),
+          status: 'complete',
+          files: result?.files?.map((f: any) => f.path) || [],
+        };
+        setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? successMessage : msg));
+      } catch (err: any) {
+        const errorMessage: ChatMessage = {
+          id: thinkingMessageId,
+          role: 'assistant',
+          content: `**Ошибка**\n\n${err.message || 'Неизвестная ошибка'}\n\nПопробуйте другой ключ.`,
+          timestamp: Date.now(),
+          status: 'error',
+        };
+        setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? errorMessage : msg));
+        setFailedPrompt(promptToRetry);
+      } finally {
+        setCurrentStatus('idle');
+      }
     }
   };
 
@@ -476,17 +527,82 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
           };
           setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? successMessage : msg));
         } catch (err: any) {
-          // Save failed prompt for retry
-          setFailedPrompt(initialPrompt);
+          const errorMsg = err.message || 'Неизвестная ошибка';
           
-          const errorMessage: ChatMessage = {
-            id: thinkingMessageId,
-            role: 'assistant',
-            content: `**Ошибка генерации**\n\n${err.message || 'Неизвестная ошибка'}\n\nНажмите "Проверить ключи" ниже, чтобы найти рабочий ключ и повторить попытку.`,
-            timestamp: Date.now(),
-            status: 'error',
-          };
-          setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? errorMessage : msg));
+          // Check if this is a chat message (not an error)
+          if (errorMsg.startsWith('CHAT_MESSAGE:')) {
+            // This is a greeting/question, not a generation request
+            // Handle it as a chat response
+            try {
+              const selectedKey = selectedUserKey ? userApiKeys.find(k => k.id === selectedUserKey) : null;
+              
+              // Build context from current project
+              let context = '';
+              if (project && project.files.length > 0) {
+                context = `Current project: ${project.name || 'Untitled'}\n`;
+                context += `Description: ${project.description || 'Mobile app'}\n`;
+                context += `Files: ${project.files.map(f => f.path).join(', ')}\n`;
+              }
+              
+              const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  message: initialPrompt,
+                  context,
+                  apiKey: selectedKey?.encryptedKey,
+                  provider: selectedKey?.provider,
+                  userId: user?.id,
+                  history: [],
+                }),
+              });
+              
+              const data = await response.json();
+              
+              if (response.ok && data.response) {
+                const chatMessage: ChatMessage = {
+                  id: thinkingMessageId,
+                  role: 'assistant',
+                  content: data.response,
+                  timestamp: Date.now(),
+                  status: 'complete',
+                };
+                setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? chatMessage : msg));
+              } else {
+                // Chat API also failed, show helpful message
+                const helpMessage: ChatMessage = {
+                  id: thinkingMessageId,
+                  role: 'assistant',
+                  content: `Привет! 👋 Чем могу помочь?\n\nНапишите, какое приложение вы хотите создать, например:\n- "Создай приложение для заметок"\n- "Сделай e-commerce приложение с корзиной"`,
+                  timestamp: Date.now(),
+                  status: 'complete',
+                };
+                setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? helpMessage : msg));
+              }
+            } catch {
+              // Fallback greeting
+              const greetingMessage: ChatMessage = {
+                id: thinkingMessageId,
+                role: 'assistant',
+                content: `Привет! 👋 Готов помочь с созданием приложения.\n\nОпишите, что вы хотите создать, и я сгенерирую код.`,
+                timestamp: Date.now(),
+                status: 'complete',
+              };
+              setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? greetingMessage : msg));
+            }
+          } else {
+            // Real error - save for retry
+            setFailedPrompt(initialPrompt);
+            
+            const errorMessage: ChatMessage = {
+              id: thinkingMessageId,
+              role: 'assistant',
+              content: `**Ошибка генерации**\n\n${errorMsg}\n\nНажмите "Проверить ключи" ниже, чтобы найти рабочий ключ и повторить попытку.`,
+              timestamp: Date.now(),
+              status: 'error',
+            };
+            setChatHistory(prev => prev.map(msg => msg.id === thinkingMessageId ? errorMessage : msg));
+          }
         } finally {
           setCurrentStatus('idle');
         }
@@ -857,6 +973,20 @@ export function AIPromptPanel({ isGenerating, progress, initialPrompt, onStopGen
       const currentProject = useProjectStore.getState().project;
       let errorsList: string[] = [];
       let warningsList: string[] = [];
+      
+      // Check if project has any files
+      if (!currentProject || currentProject.files.length === 0) {
+        const noProjectMessage: ChatMessage = {
+          id: messageId,
+          role: 'assistant',
+          content: '**🔍 Проверка кода**\n\n⚠️ **Проект пуст**\n\nСначала создайте приложение. Напишите что вы хотите создать, например:\n- "Создай приложение для заметок"\n- "Сделай калькулятор"',
+          timestamp: Date.now(),
+          status: 'complete',
+          action: 'terminal',
+        };
+        setChatHistory(prev => prev.map(msg => msg.id === messageId ? noProjectMessage : msg));
+        return;
+      }
       
       if (currentProject && currentProject.files.length > 0) {
         currentProject.files.forEach(file => {
